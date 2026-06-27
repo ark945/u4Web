@@ -61,7 +61,7 @@ jobs:
 
     - name: Compile and Install Boron for Host
       run: |
-        git clone https://git.code.sf.net/p/urlan/boron/code boron-host
+        git clone https://github.com/0branch/boron.git boron-host
         cd boron-host
         git checkout v2.0.8
         ./configure --static
@@ -71,7 +71,7 @@ jobs:
 
     - name: Compile libboron.a for WebAssembly
       run: |
-        git clone https://git.code.sf.net/p/urlan/boron/code boron-wasm
+        git clone https://github.com/0branch/boron.git boron-wasm
         cd boron-wasm
         git checkout v2.0.8
         
