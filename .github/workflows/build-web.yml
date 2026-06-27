@@ -109,7 +109,8 @@ jobs:
       run: |
         cd xu4/src/faun
         emconfigure ./configure --no_flac --static
-        emmake make clean
+        # Tell emcc to use Emscripten's built-in SDL2 port (provides SDL2/SDL.h)
+        export EMCC_CFLAGS="-sUSE_SDL=2"
         emmake make
         cd ../../..
 
