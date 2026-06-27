@@ -81,6 +81,9 @@ jobs:
         
         # Only build the static library (not the boron executable which needs readline)
         emmake make libboron.a
+        
+        # Install headers and libraries locally to a "dist" folder
+        make DESTDIR=${{ github.workspace }}/boron-wasm/dist install-dev
         cd ..
 
     - name: Translate Vendor Scripts & Pack Game Modules
@@ -129,9 +132,9 @@ jobs:
         emmake make \
           MAIN=xu4.js \
           EXEEXT=.js \
-          CXXFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1" \
-          CFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1" \
-          LDFLAGS="-L${{ github.workspace }}/boron-wasm -Lfaun \
+          CXXFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1" \
+          CFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1" \
+          LDFLAGS="-L${{ github.workspace }}/boron-wasm/dist/lib -Lfaun \
             -sUSE_GLFW=3 \
             -sUSE_SDL=2 \
             -sUSE_LIBPNG=1 \
