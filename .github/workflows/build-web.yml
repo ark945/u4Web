@@ -87,6 +87,7 @@ jobs:
         
         # Install headers and libraries locally to a "dist" folder
         make DESTDIR=${{ github.workspace }}/boron-wasm/dist install-dev
+        cp libboron.a ${{ github.workspace }}/boron-wasm/dist/lib/
         cd ..
 
     - name: Translate Vendor Scripts & Pack Game Modules
@@ -135,6 +136,7 @@ jobs:
         emmake make \
           MAIN=xu4.js \
           EXEEXT=.js \
+          LIBS="-lfaun -lboron" \
           CXXFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -DVERSION=\\\"DR-1.0\\\"" \
           CFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -DVERSION=\\\"DR-1.0\\\"" \
           LDFLAGS="-L${{ github.workspace }}/boron-wasm/dist/lib -Lfaun \
