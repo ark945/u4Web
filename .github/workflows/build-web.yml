@@ -34,7 +34,12 @@ jobs:
         git clone https://github.com/xu4-engine/u4.git xu4
         cd xu4
         git checkout master
-        git submodule update --init --recursive
+        
+        # Clone faun from GitHub mirror instead of Codeberg (which is currently down)
+        git clone https://github.com/WickedSmoke/faun.git src/faun
+        
+        # Only update the glv submodule (which is on SourceForge)
+        git submodule update --init --recursive src/glv
         cd ..
 
     - name: Apply Chinese Translation Patches
