@@ -195,11 +195,17 @@ jobs:
         # Clone Hugging Face Space repository
         git clone https://oauth2:${HF_TOKEN}@${HF_SPACE_URL#https://} hf-space
         
-        # Copy built static site to hf-space folder
-        cp -rf dist/web/* hf-space/
-        
         # Commit and push updates
         cd hf-space
+        
+        # Initialize Git LFS and track large files (needed because HF rejects push of files > 10 MiB)
+        git lfs install
+        git lfs track "*.data"
+        git lfs track "*.wasm"
+        
+        # Copy built static site to hf-space folder
+        cp -rf ../dist/web/* .
+        
         git add -A
         if git diff-index --quiet HEAD --; then
           echo "No changes to deploy"
