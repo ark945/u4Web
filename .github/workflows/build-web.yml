@@ -146,7 +146,7 @@ jobs:
             -sUSE_OGG=1 \
             -sUSE_VORBIS=1 \
             -sPTHREAD_POOL_SIZE=4 \
-            -sGL_ES3=1 \
+            -sFULL_ES3=1 \
             -sMIN_WEBGL_VERSION=2 \
             -sALLOW_MEMORY_GROWTH=1 \
             --preload-file ../Ultima-IV.mod@/Ultima-IV.mod \
