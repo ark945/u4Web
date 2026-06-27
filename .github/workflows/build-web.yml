@@ -74,13 +74,8 @@ jobs:
         # so that emmake can inject emcc as the compiler
         sed -i $'s|^\tcc |\t$(CC) |' Makefile
         
-        # Debug: show patched compile rules
-        echo "=== Patched Makefile compile rules ==="
-        grep -n '$(CC)\|^[[:space:]]*cc ' Makefile || true
-        echo "=== config.opt ==="
-        cat config.opt || true
-        
-        emmake make
+        # Only build the static library (not the boron executable which needs readline)
+        emmake make libboron.a
         cd ..
 
     - name: Translate Vendor Scripts & Pack Game Modules
