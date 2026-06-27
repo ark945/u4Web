@@ -70,12 +70,16 @@ jobs:
         # Configure with features incompatible with Emscripten disabled
         ./configure --static --no-execute --no-socket --no-compress --no-readline
         
-        # Patch Makefile: replace hardcoded 'cc' with '$(CC)' so emmake can inject emcc
-        sed -i 's/\tcc -c/\t$(CC) -c/g' Makefile
-        sed -i 's/\tcc $^/\t$(CC) $^/g' Makefile
-        sed -i 's/\tcc -o/\t$(CC) -o/g' Makefile
+        # Patch Makefile: replace hardcoded 'cc' compiler calls with '$(CC)'
+        # so that emmake can inject emcc as the compiler
+        sed -i $'s|^\tcc |\t$(CC) |' Makefile
         
-        emmake make clean
+        # Debug: show patched compile rules
+        echo "=== Patched Makefile compile rules ==="
+        grep -n '$(CC)\|^[[:space:]]*cc ' Makefile || true
+        echo "=== config.opt ==="
+        cat config.opt || true
+        
         emmake make
         cd ..
 
