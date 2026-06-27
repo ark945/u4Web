@@ -52,6 +52,9 @@ jobs:
         git -C xu4 apply --ignore-whitespace ../patches/engine.patch
         git -C xu4 apply --ignore-whitespace ../patches/faun.patch
         
+        # Fix incomplete type errors in screen_glfw.cpp (missing map.h and creature.h)
+        sed -i 's|#include "config.h"|#include "config.h"\n#include "map.h"\n#include "creature.h"|' xu4/src/screen_glfw.cpp
+        
         # Copy translation font and lookup binary assets
         cp assets/cjk_font*.bin xu4/
         cp assets/u4_cht.tab xu4/
