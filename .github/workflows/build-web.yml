@@ -66,7 +66,15 @@ jobs:
         git clone https://git.code.sf.net/p/urlan/boron/code boron-wasm
         cd boron-wasm
         git checkout v2.0.8
-        emconfigure ./configure --static
+        
+        # Configure with features incompatible with Emscripten disabled
+        ./configure --static --no-execute --no-socket --no-compress --no-readline
+        
+        # Patch Makefile: replace hardcoded 'cc' with '$(CC)' so emmake can inject emcc
+        sed -i 's/\tcc -c/\t$(CC) -c/g' Makefile
+        sed -i 's/\tcc $^/\t$(CC) $^/g' Makefile
+        sed -i 's/\tcc -o/\t$(CC) -o/g' Makefile
+        
         emmake make clean
         emmake make
         cd ..
