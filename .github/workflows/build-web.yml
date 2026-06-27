@@ -45,7 +45,7 @@ jobs:
         
         # Apply C++ patches
         git -C xu4 apply --ignore-whitespace ../patches/engine.patch
-        git -C xu4/src/faun apply --ignore-whitespace ../../../patches/faun.patch
+        git -C xu4 apply --ignore-whitespace ../patches/faun.patch
         
         # Copy translation font and lookup binary assets
         cp assets/cjk_font*.bin xu4/
