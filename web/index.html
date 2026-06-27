@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultima IV: Quest of the Avatar — 繁體中文網頁版</title>
+    <!-- 引入 COI Service Worker 以在靜態代管上啟用 SharedArrayBuffer (Wasm 多執行緒) -->
+    <script src="coi-serviceworker.js"></script>
+    <!-- 引入 JSZip 用於存檔打包與解壓 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0c10;
+            --container-bg: rgba(26, 26, 36, 0.7);
+            --border-color: #1f2833;
+            --accent-color: #66fcf1;
+            --accent-dim: #45a29e;
+            --text-color: #c5c6c7;
+            --text-bright: #ffffff;
+            --shadow-color: rgba(102, 252, 241, 0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 鎖定畫面 / 密碼驗證 */
+        #lock-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at center, #1f2833 0%, #0b0c10 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.5s ease-out;
+        }
+
+        .lock-container {
+            background: var(--container-bg);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(10px);
+            padding: 40px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5), 0 0 15px var(--shadow-color);
+        }
+
+        .lock-container h1 {
+            color: var(--text-bright);
+            font-size: 24px;
+            margin-bottom: 10px;
+            letter-spacing: 2px;
+        }
+
+        .lock-container p {
+            font-size: 14px;
+            margin-bottom: 25px;
+            color: var(--accent-dim);
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-color);
+        }
+
+        .password-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-bright);
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .password-input:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 10px rgba(102, 252, 241, 0.3);
+        }
+
+        .btn-unlock {
+            width: 100%;
+            padding: 12px;
+            background: var(--accent-color);
+            border: none;
+            border-radius: 6px;
+            color: #0b0c10;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.3s, transform 0.1s;
+        }
+
+        .btn-unlock:hover {
+            background: #80fff7;
+            box-shadow: 0 0 15px var(--accent-color);
+        }
+
+        .btn-unlock:active {
+            transform: scale(0.98);
+        }
+
+        #error-msg {
+            color: #ff4d4d;
+            font-size: 13px;
+            margin-top: 15px;
+            min-height: 20px;
+        }
+
+        /* 遊戲畫面容器 */
+        #game-container {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            max-width: 100%;
+        }
+
+        /* Canvas 畫布 */
+        canvas {
+            background-color: black;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+            max-width: 100vw;
+            max-height: 85vh;
+            cursor: default;
+        }
+
+        /* 存檔管理控制面板 */
+        .control-panel {
+            margin-top: 15px;
+            display: flex;
+            gap: 15px;
+            background: var(--container-bg);
+            border: 1px solid var(--border-color);
+            padding: 10px 20px;
+            border-radius: 8px;
+            backdrop-filter: blur(5px);
+        }
+
+        .btn-control {
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid var(--accent-dim);
+            color: var(--accent-color);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .btn-control:hover {
+            background: var(--accent-color);
+            color: #0b0c10;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 密碼鎖定畫面 -->
+    <div id="lock-screen">
+        <div class="lock-container">
+            <h1>Britannia 封印</h1>
+            <p>請輸入密碼解鎖進入不列顛尼亞</p>
+            <div class="input-group">
+                <label for="password">守護密碼</label>
+                <input type="password" id="password" class="password-input" placeholder="請輸入密碼" autofocus>
+            </div>
+            <button class="btn-unlock" onclick="verifyPassword()">啟程</button>
+            <div id="error-msg"></div>
+        </div>
+    </div>
+
+    <!-- 遊戲主體與存檔管理器 -->
+    <div id="game-container">
+        <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+        <div class="control-panel">
+            <button class="btn-control" onclick="downloadSaves()">💾 下載存檔備份 (Download)</button>
+            <button class="btn-control" onclick="triggerUpload()">📂 上傳存檔還原 (Upload)</button>
+            <input type="file" id="upload-input" style="display: none;" accept=".zip" onchange="uploadSaves(event)">
+        </div>
+    </div>
+
+    <script>
+        // 密碼比對邏輯 (arku4 的 SHA-256 雜湊)
+        async function verifyPassword() {
+            const password = document.getElementById('password').value;
+            const errorMsg = document.getElementById('error-msg');
+            
+            // 計算輸入密碼的 SHA-256 Hash
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            
+            // 比對 arku4 的 Hash
+            if (hashHex === "003a10c54e22356d77f80d502f4dbbb509909522d17cb6ba195b37806345305b") {
+                errorMsg.innerText = "驗證成功，喚醒聖者中...";
+                document.getElementById('lock-screen').style.opacity = '0';
+                setTimeout(() => {
+                    document.getElementById('lock-screen').style.display = 'none';
+                    document.getElementById('game-container').style.display = 'flex';
+                    initializeGameEngine();
+                }, 500);
+            } else {
+                errorMsg.innerText = "密碼錯誤，真理、愛與勇氣拒絕了您。";
+            }
+        }
+
+        // 當按下 Enter 鍵時觸發驗證
+        document.getElementById('password').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') verifyPassword();
+        });
+
+        // Wasm 引擎設定與加載
+        var Module = {
+            preRun: [
+                function() {
+                    // 初始化存檔目錄並掛載 IndexedDB (IDBFS)
+                    try {
+                        Module.FS.mkdir('/home');
+                        Module.FS.mkdir('/home/web_user');
+                        Module.FS.mkdir('/home/web_user/.config');
+                        Module.FS.mkdir('/home/web_user/.config/xu4');
+                        
+                        Module.FS.mount(Module.FS.filesystems.IDBFS, {}, '/home/web_user/.config/xu4');
+                        
+                        // 啟動時自本機 IndexedDB 同步存檔到 VFS
+                        Module.FS.syncfs(true, function (err) {
+                            if (err) console.error("同步載入本地存檔失敗:", err);
+                            else console.log("本地存檔同步加載成功！");
+                        });
+                    } catch (e) {
+                        console.error("建立 IDBFS 存檔目錄出錯:", e);
+                    }
+                }
+            ],
+            postRun: [],
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                return canvas;
+            })(),
+            print: function(text) {
+                console.log(text);
+            },
+            printErr: function(text) {
+                console.error(text);
+            }
+        };
+
+        // 動態加載編譯好的 Wasm JS 檔案
+        function initializeGameEngine() {
+            var script = document.createElement('script');
+            script.src = 'xu4.js';
+            document.body.appendChild(script);
+        }
+
+        // 存檔路徑常數與檔案清單
+        const SAVE_DIR = '/home/web_user/.config/xu4/';
+        const SAVE_FILES = ['PARTY.SAV', 'MONSTERS.SAV', 'DNGMAP.SAV', 'OUTMONST.SAV'];
+
+        // 1. 下載存檔：打包為 ZIP 備份
+        async function downloadSaves() {
+            if (!Module.FS) {
+                alert("遊戲尚未加載完畢！");
+                return;
+            }
+            
+            const zip = new JSZip();
+            let hasFiles = false;
+
+            SAVE_FILES.forEach(filename => {
+                const path = SAVE_DIR + filename;
+                try {
+                    // 自 Emscripten VFS 讀取二進位資料
+                    const fileData = Module.FS.readFile(path);
+                    zip.file(filename, fileData);
+                    hasFiles = true;
+                    console.log(`打包存檔成功: ${filename}`);
+                } catch (e) {
+                    console.log(`無此存檔或讀取失敗: ${filename}`);
+                }
+            });
+
+            if (!hasFiles) {
+                alert("本機尚未建立任何創世紀存檔進度！");
+                return;
+            }
+
+            try {
+                const content = await zip.generateAsync({type: "blob"});
+                const url = URL.createObjectURL(content);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = "u4_saves_backup.zip";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                console.log("存檔 ZIP 備份下載成功");
+            } catch (err) {
+                console.error("產生 ZIP 備份失敗:", err);
+                alert("備份失敗，請查看瀏覽器控制台");
+            }
+        }
+
+        // 觸發上傳檔案選擇器
+        function triggerUpload() {
+            document.getElementById('upload-input').click();
+        }
+
+        // 2. 上傳存檔：解壓 ZIP 還原並寫入 VFS + 同步至 IDBFS
+        function uploadSaves(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                try {
+                    const zipData = e.target.result;
+                    const zip = await JSZip.loadAsync(zipData);
+                    
+                    let writtenCount = 0;
+                    for (const filename of SAVE_FILES) {
+                        const zipFile = zip.file(filename);
+                        if (zipFile) {
+                            const data = await zipFile.async("uint8array");
+                            const path = SAVE_DIR + filename;
+                            Module.FS.writeFile(path, data);
+                            writtenCount++;
+                            console.log(`存檔寫入虛擬系統: ${filename}`);
+                        }
+                    }
+
+                    if (writtenCount === 0) {
+                        alert("上傳的 ZIP 中未包含合法的創世紀 IV 存檔！");
+                        return;
+                    }
+
+                    // 強制同步虛擬檔案系統變動到瀏覽器持久 IndexedDB
+                    Module.FS.syncfs(false, function (err) {
+                        if (err) {
+                            console.error("同步寫入 IndexedDB 失敗:", err);
+                            alert("寫入瀏覽器快取失敗！");
+                        } else {
+                            alert("存檔成功導入並同步！網頁將立即重新載入以讀取新檔...");
+                            window.location.reload();
+                        }
+                    });
+
+                } catch (err) {
+                    console.error("解密或解析 ZIP 失敗:", err);
+                    alert("解析 ZIP 檔失敗，請確認該檔案為下載的備份 ZIP！");
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+    </script>
+</body>
+</html>

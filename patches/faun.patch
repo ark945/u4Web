@@ -1,0 +1,13 @@
+diff --git a/src/faun/faun.c b/src/faun/faun.c
+index a8e2a1b..b9c3d4e 100644
+--- a/src/faun/faun.c
++++ b/src/faun/faun.c
+@@ -45,6 +45,8 @@ static FILE* _errStream;
+ 
+ #ifdef ANDROID
+ #include "sys_aaudio.c"
++#elif defined(__EMSCRIPTEN__)
++#include "sys_sdl.c"
+ #elif defined(__linux__)
+ #include "sys_pulseaudio.c"
+ #elif defined(_WIN32)

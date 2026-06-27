@@ -1,0 +1,188 @@
+name: Compile and Deploy u4Web
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Python & Host Build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libpng-dev libogg-dev libvorbis-dev libasound2-dev libpulse-dev fonts-noto-cjk python3-pip
+        pip install Pillow numpy scipy
+
+    - name: Set up Emscripten SDK
+      uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: 3.1.53 # Pin to a stable emsdk version
+
+    - name: Clone Upstream xu4 Engine
+      run: |
+        git clone https://github.com/xu4-engine/u4.git xu4
+        cd xu4
+        git checkout master
+        git submodule update --init --recursive
+        cd ..
+
+    - name: Apply Chinese Translation Patches
+      run: |
+        # Copy translation source code
+        cp patches/cht.cpp patches/cht.h xu4/src/
+        cp patches/sys_sdl.c xu4/src/faun/
+        
+        # Apply C++ patches
+        git -C xu4 apply --ignore-whitespace ../patches/engine.patch
+        git -C xu4/src/faun apply --ignore-whitespace ../../../patches/faun.patch
+        
+        # Copy translation font and lookup binary assets
+        cp assets/cjk_font*.bin xu4/
+        cp assets/u4_cht.tab xu4/
+
+    - name: Compile and Install Boron for Host
+      run: |
+        git clone https://git.code.sf.net/p/urlan/boron/code boron-host
+        cd boron-host
+        git checkout v2.0.8
+        ./configure --static
+        make
+        sudo make install
+        cd ..
+
+    - name: Compile libboron.a for WebAssembly
+      run: |
+        git clone https://git.code.sf.net/p/urlan/boron/code boron-wasm
+        cd boron-wasm
+        git checkout v2.0.8
+        emconfigure ./configure --static
+        emmake make clean
+        emmake make
+        cd ..
+
+    - name: Translate Vendor Scripts & Pack Game Modules
+      run: |
+        # Translate the vendors Boron script with the bilingual dictionary
+        python tools/patch_vendor_boron.py \
+          --vendors xu4/module/Ultima-IV/vendors.b \
+          --bilingual assets/vendor_bilingual.json
+        
+        # Run Makefile rules to pack modules (using Host Boron)
+        cd xu4
+        make mod
+        cd ..
+
+    - name: Download Original Game Files
+      run: |
+        cd xu4
+        make download
+        cd ..
+
+    - name: Generate GPU SDF CJK Font
+      run: |
+        # Use python to generate the CJK MSDF font texture atlas
+        python tools/build_cjk_txf.py \
+          --font /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
+          --index 3 \
+          --atlas xu4/module/render/font/cfont.png \
+          --out-txf xu4/module/render/font/cfont-cjk.txf
+
+    - name: Compile libfaun.a for WebAssembly (with SDL2 audio queue)
+      run: |
+        cd xu4/src/faun
+        emconfigure ./configure --no_flac --static
+        emmake make clean
+        emmake make
+        cd ../../..
+
+    - name: Compile xu4 Engine to WebAssembly
+      run: |
+        cd xu4
+        ./configure --glfw --gpu
+        cd src
+        
+        # Compile all .cpp/.c files and link into xu4.js (Wasm)
+        emmake make \
+          MAIN=xu4.js \
+          EXEEXT=.js \
+          CXXFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/include -O3 -DNDEBUG" \
+          CFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/include -O3 -DNDEBUG" \
+          LDFLAGS="-L${{ github.workspace }}/boron-wasm -Lfaun \
+            -sUSE_GLFW=3 \
+            -sUSE_SDL=2 \
+            -sUSE_LIBPNG=1 \
+            -sUSE_ZLIB=1 \
+            -sUSE_PTHREADS=1 \
+            -sPTHREAD_POOL_SIZE=4 \
+            -sGL_VERSION=3 \
+            -sGL_ES3=1 \
+            -sMIN_WEBGL_VERSION=2 \
+            -sALLOW_MEMORY_GROWTH=1 \
+            --preload-file ../Ultima-IV.mod@/Ultima-IV.mod \
+            --preload-file ../U4-Upgrade.mod@/U4-Upgrade.mod \
+            --preload-file ../render.pak@/render.pak \
+            --preload-file ../cjk_font.bin@/cjk_font.bin \
+            --preload-file ../cjk_font_firefly.bin@/cjk_font_firefly.bin \
+            --preload-file ../cjk_font_kai.bin@/cjk_font_kai.bin \
+            --preload-file ../u4_cht.tab@/u4_cht.tab \
+            --preload-file ../ultima4.zip@/ultima4.zip \
+            --preload-file ../u4upgrad.zip@/u4upgrad.zip" \
+          xu4.js
+        cd ../..
+
+    - name: Assemble Web Distribution Directory
+      run: |
+        mkdir -p dist/web
+        
+        # Copy web layout files
+        cp web/index.html dist/web/
+        
+        # Fetch coi-serviceworker to support SharedArrayBuffer on static spaces
+        curl -sSL -o dist/web/coi-serviceworker.js https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/master/coi-serviceworker.js
+        
+        # Copy compiled Emscripten WebAssembly outputs
+        cp xu4/src/xu4.js dist/web/
+        cp xu4/src/xu4.wasm dist/web/
+        cp xu4/src/xu4.data dist/web/
+        cp xu4/src/xu4.worker.js dist/web/
+        
+        echo "=== dist/web contents ==="
+        ls -la dist/web
+
+    - name: Deploy to Hugging Face Spaces
+      if: env.HF_TOKEN != '' && env.HF_SPACE_URL != ''
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
+      run: |
+        # Set up git credentials
+        git config --global user.email "github-actions-bot@github.com"
+        git config --global user.name "GitHub Actions Bot"
+        
+        # Clone Hugging Face Space repository
+        git clone https://oauth2:${HF_TOKEN}@${HF_SPACE_URL#https://} hf-space
+        
+        # Copy built static site to hf-space folder
+        cp -rf dist/web/* hf-space/
+        
+        # Commit and push updates
+        cd hf-space
+        git add -A
+        if git diff-index --quiet HEAD --; then
+          echo "No changes to deploy"
+        else
+          git commit -m "Deploy from GitHub Actions: ${GITHUB_SHA::8}"
+          git push origin main || git push origin master
+        fi
+        cd ..

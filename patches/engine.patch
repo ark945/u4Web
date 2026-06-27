@@ -1,0 +1,2775 @@
+diff --git a/android/Android.mk b/android/Android.mk
+index 263dad7..103fde2 100644
+--- a/android/Android.mk
++++ b/android/Android.mk
+@@ -58,6 +58,7 @@ LOCAL_SRC_FILES := app_main.c \
+ 	../src/screen_glv.cpp \
+ 	../src/sound_faun.cpp \
+ 	../src/config_boron.cpp \
++	../src/cht.cpp \
+ 	../src/module.c \
+ 	../src/support/cdi.c \
+ 	../src/annotation.cpp \
+diff --git a/android/app_main.c b/android/app_main.c
+index edeeec2..aa16285 100644
+--- a/android/app_main.c
++++ b/android/app_main.c
+@@ -125,7 +125,9 @@ static void extractModules( struct android_app* app )
+                 ext = fn + len - 4;
+                 if (strcmp(ext, ".mod") == 0 ||
+                     strcmp(ext, ".pak") == 0 ||
+-                    strcmp(ext, ".zip") == 0) {
++                    strcmp(ext, ".zip") == 0 ||
++                    strcmp(ext, ".bin") == 0 ||   /* U4 繁中化:CJK 點陣字 */
++                    strcmp(ext, ".tab") == 0) {   /* U4 繁中化:en→zh lookup */
+                     if (! extractAsset(app->activity, fn, buf, lenCopy)) {
+                         errorFatal("Cannot extract module %s", fn);
+                         break;
+diff --git a/project.b b/project.b
+index f83a553..65655d0 100644
+--- a/project.b
++++ b/project.b
+@@ -57,7 +57,7 @@ exe %xu4 [
+ 			]
+ 		]
+ 		glfw [
+-			win32 [libs [%glfw3 %faun %vorbisfile %ole32]]
++			win32 [libs [%glfw3 %faun %vorbisfile %ole32 %winmm]]
+ 			unix  [libs [%glfw %faun]]
+ 			sources_from %src [
+ 				%screen_glfw.cpp
+@@ -144,6 +144,7 @@ exe %xu4 [
+ 		%combat.cpp
+ 		%controller.cpp
+ 		%context.cpp
++		%cht.cpp
+ 		%creature.cpp
+ 		%death.cpp
+ 		%debug.cpp
+diff --git a/src/Makefile b/src/Makefile
+index 3d2f358..b02a9a6 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -43,6 +43,7 @@ endif
+ 
+ CXXFLAGS=-Wall -I. -Isupport $(UIFLAGS) -DVERSION=\"$(VERSION)\"
+ #CXXFLAGS+=-rdynamic -DHAVE_BACKTRACE=1 -DHAVE_VARIADIC_MACROS=1
++CXXFLAGS+=-rdynamic    # U4 繁中化:崩潰 backtrace 能解析函式名(u4chtCrashHandler)
+ 
+ # Choose one of these for debug/release mode.
+ #CXXFLAGS+=-g -DDEBUG
+diff --git a/src/Makefile.common b/src/Makefile.common
+index 6736af1..ac16f35 100644
+--- a/src/Makefile.common
++++ b/src/Makefile.common
+@@ -22,6 +22,7 @@ CXXSRCS=\
+         combat.cpp \
+         controller.cpp \
+         context.cpp \
++        cht.cpp \
+         creature.cpp \
+         death.cpp \
+         debug.cpp \
+diff --git a/src/config.h b/src/config.h
+index dcb7e30..e3f3db1 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -91,6 +91,9 @@ protected:
+ };
+ 
+ extern Config* configInit(const char* module, const char* soundtrack);
++/* U4 繁中化:檢查模組(.mod)是否存在;F2 主題循環用來跳過缺失主題,
++   避免 configInit 對缺檔直接 errorFatal("Cannot find module ...") 殺掉程式。 */
++extern bool configModuleExists(const char* name);
+ extern void    configFree(Config*);
+ 
+ #define foreach(it, col)    for(it = col.begin(); it != col.end(); ++it)
+diff --git a/src/config_boron.cpp b/src/config_boron.cpp
+index 5136bdc..ffbb2d4 100644
+--- a/src/config_boron.cpp
++++ b/src/config_boron.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <boron/boron.h>
+ 
++#include "cht.h"
+ #include "config.h"
+ #include "city.h"
+ #include "dungeon.h"
+@@ -760,16 +761,23 @@ static Creature* conf_creature(ConfigBoron* cfg, Tileset* ts, UBlockIt& bi)
+ //--------------------------------------
+ // Items (weapons & armor)
+ 
++/* U4 繁中化:武器/防具名 + 縮寫經 chtLookup 換中文(vendor 面板 / 角色 ztats)。
++ * chtLookup 命中回傳指向 lookup 表的常駐指標,直接回傳安全。 */
++static inline const char* chtConfStr(const char* s) {
++    const char* zh = s ? chtLookup(s, (int) strlen(s)) : NULL;
++    return zh ? zh : s;
++}
++
+ const char* Armor::getName() const {
+-    return xu4.config->confString(name);
++    return chtConfStr(xu4.config->confString(name));
+ }
+ 
+ const char* Weapon::getName() const {
+-    return xu4.config->confString(name);
++    return chtConfStr(xu4.config->confString(name));
+ }
+ 
+ const char* Weapon::getAbbrev() const {
+-    return xu4.config->confString(abbr);
++    return chtConfStr(xu4.config->confString(abbr));
+ }
+ 
+ static Armor* conf_armor(UThread* ut, int type, Armor* arm, UBlockIt& bi) {
+@@ -1164,6 +1172,12 @@ static int findModule(const char* name, char* path, size_t pathMax) {
+     return u4find_pathc(name, ext, path, pathMax);
+ }
+ 
++// U4 繁中化:供 F2 主題循環檢查模組是否存在(缺失則跳過,不呼叫會 fatal 的 configInit)。
++bool configModuleExists(const char* name) {
++    char path[512];
++    return findModule(name, path, sizeof(path)) != 0;
++}
++
+ // Create Config service.
+ Config* configInit(const char* module, const char* soundtrack) {
+     int renderFound, stFound;
+diff --git a/src/creature.cpp b/src/creature.cpp
+index 0c64297..8618a4b 100644
+--- a/src/creature.cpp
++++ b/src/creature.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <cstring>
+ #include "combat.h"
++#include "cht.h"
+ #include "config.h"
+ #include "context.h"
+ #include "debug.h"
+@@ -48,7 +49,11 @@ Creature::Creature(const Creature* cproto) : Object(Object::CREATURE) {
+ }
+ 
+ const char* Creature::getName() const {
+-    return CSTR(name);
++    /* U4 繁中化:怪物/NPC 名查表("You meet a X" / 隊伍訊息);config.b 受
++     * Boron UCS-2 限制,改在此查表(英文→tab→UTF-8)。 */
++    const char* s = CSTR(name);
++    const char* zh = s ? chtLookup(s, (int) strlen(s)) : 0;
++    return zh ? zh : s;
+ }
+ 
+ bool Creature::isAttackable() const  {
+@@ -448,7 +453,7 @@ void Creature::act(CombatController *controller) {
+     case CA_ADVANCE: {
+         if (moveCombatObject(action, map, this, target->coords)) {
+             if (MAP_IS_OOB(map, coords)) {
+-                screenMessage("\n%c%s Flees!%c\n", FG_YELLOW, CSTR(name), FG_WHITE);
++                screenMessage("\n%c%s Flees!%c\n", FG_YELLOW, getName(), FG_WHITE);
+ 
+                 /* Congrats, you have a heart! */
+                 if (isGood())
+@@ -516,7 +521,7 @@ bool Creature::divide(Map* map) {
+     if (d != DIR_NONE) {
+         Coords new_c(coords);
+ 
+-        screenMessage("%s Divides!\n", CSTR(name));
++        screenMessage("%s Divides!\n", getName());
+ 
+         /* find a spot to put our new creature */
+         map_move(new_c, d, map);
+@@ -691,7 +696,7 @@ bool Creature::applyDamage(Map* map, int damage, bool byplayer) {
+     if (id != LORDBRITISH_ID)
+         AdjustValueMin(hp, -damage, 0);
+ 
+-    const char* nameStr = CSTR(name);
++    const char* nameStr = getName();    /* U4 繁中化:走 chtLookup,顯示中文怪名 */
+ 
+     switch (getState()) {
+ 
+diff --git a/src/discourse_castle.cpp b/src/discourse_castle.cpp
+index cdd6837..56c0966 100644
+--- a/src/discourse_castle.cpp
++++ b/src/discourse_castle.cpp
+@@ -3,6 +3,7 @@
+  */
+ 
+ #include <cstring>
++#include "cht.h"
+ #include "context.h"
+ #include "party.h"
+ #include "u4.h"
+@@ -103,6 +104,10 @@ static void lordBritishCheckLevels() {
+  * Print text with pauses after paragraphs and/or complete pages.
+  */
+ static void messageParts(const char* text) {
++    /* U4 繁中化:Lord British 城堡對白整段查表(命中用中文,再分頁)。 */
++    const char* zh = chtLookup(text, (int) strlen(text));
++    if (zh) text = zh;
++
+     const char* cp = text;
+     int lines = 0;
+     int len;
+@@ -308,21 +313,20 @@ static void runTalkLordBritish(const U4TalkLordBritish* lb)
+     musicPlay(MUSIC_RULEBRIT);
+ 
+     if (c->saveGame->lbintro) {
+-        static const char* welcome = "\n\n\nLord British says:  Welcome ";
+-
++        /* U4 繁中化:歡迎詞改為內嵌 %s 的整段 format,讓 chtLookup 命中可譯。 */
+         switch (party->size()) {
+             case 1:
+-                message("%s%s!\n", welcome, pcName.c_str());
++                message("\n\n\nLord British says:  Welcome %s!\n", pcName.c_str());
+                 soundSpeakLine(VOICE_LB, LINE_WELCOME, true);
+                 break;
+             case 2:
+-                message("%s%s and thee also %s!\n", welcome, pcName.c_str(),
+-                        party->member(1)->getName());
++                message("\n\n\nLord British says:  Welcome %s and thee also %s!\n",
++                        pcName.c_str(), party->member(1)->getName());
+                 soundSpeakLine(VOICE_LB, LINE_WELCOME, true);
+                 break;
+             default:
+-                message("%s%s and thy worthy Adventurers!\n",
+-                        welcome, pcName.c_str());
++                message("\n\n\nLord British says:  Welcome %s and thy worthy Adventurers!\n",
++                        pcName.c_str());
+                 soundSpeakLine(VOICE_LB, LINE_WELCOME_ADV, true);
+                 break;
+         }
+diff --git a/src/discourse_tlk.cpp b/src/discourse_tlk.cpp
+index 01f961c..874c171 100644
+--- a/src/discourse_tlk.cpp
++++ b/src/discourse_tlk.cpp
+@@ -1,5 +1,6 @@
+ // Discourse for U4 Tlk
+ 
++#include "cht.h"     // U4 繁中化:NPC look 描述查表
+ #include "game.h"
+ #include "party.h"
+ #include "screen.h"
+@@ -12,7 +13,8 @@ enum DialogueString {
+     DS_KEYWORD,
+     DS_QUESTION,
+     DS_ANSWER_Y,
+-    DS_ANSWER_N
++    DS_ANSWER_N,
++    DS_TOPICS       /* U4 繁中化:回傳該 NPC 2 個專屬主題的英文(供輸入提示) */
+ };
+ 
+ enum TalkOpcode {
+@@ -86,6 +88,13 @@ static void runTalkDialogue(TalkFunc func, TalkState* ts)
+ 
+     while (xu4.stage == StagePlay) {
+         message("\nYour Interest:\n");
++        /* U4 繁中化:列出該 NPC 專屬主題的英文,讓玩家知道該輸入什麼
++           (標準關鍵字 name/job/health 仍靠探索,保留手感)。 */
++        {
++            const char* topics = func(ts, DS_TOPICS, NULL);
++            if (topics && *topics)
++                message("(可問 %s)\n", topics);
++        }
+         input = gameGetInput(16);
+         screenCrLf();
+         screenCrLf();
+@@ -346,6 +355,32 @@ static const char* U4Talk_dialogue(TalkState* ts, int value, const char* input)
+     if (tlk->askAfter == TRIGGER) \
+         ts->nextOp = OP_PAUSE_ASK;
+ 
++    if (value == DS_TOPICS) {
++        /* U4 繁中化:回傳該 NPC 2 個專屬主題的英文,供「汝欲問」輸入提示。
++           關鍵字比對只看前 4 字母,提示也以多裁到 4 字(夠玩家輸入)。 */
++        static char buf[40];
++        buf[0] = '\0';
++        for (int i = 0; i < 2; ++i) {
++            uint16_t off = i ? tlk->topic2 : tlk->topic1;
++            if (! off)
++                continue;
++            const char* t = tlk->strings + off;
++            if (! *t)
++                continue;
++            if (buf[0])
++                strncat(buf, " / ", sizeof(buf) - strlen(buf) - 1);
++            char word[8];
++            int n = 0;
++            while (t[n] && t[n] != ' ' && n < 4) {
++                word[n] = (t[n] >= 'A' && t[n] <= 'Z') ? t[n] + 32 : t[n];
++                ++n;
++            }
++            word[n] = '\0';
++            strncat(buf, word, sizeof(buf) - strlen(buf) - 1);
++        }
++        return buf[0] ? buf : NULL;
++    }
++
+     if (value == DS_KEYWORD) {
+         const char* topic;
+ 
+@@ -375,14 +410,39 @@ static const char* U4Talk_dialogue(TalkState* ts, int value, const char* input)
+         }
+     } else {
+         switch(value) {
+-            case DS_NAME:
+-                return USTR(name);
+-            case DS_PRONOUN:
+-                return USTR(pronoun);
+-            case DS_LOOK:
+-                return USTR(look);
+-            case DS_QUESTION:
+-                return USTR(question);
++            case DS_NAME: {
++                /* U4 繁中化:NPC 名稱(含 a guard/a child 等角色化名稱)查表。
++                 * 否則「我是 %s」會印出英文名(如「我是 a guard」)。譯名已在
++                 * talk_bilingual.json 的 name 欄 → u4_cht.tab。 */
++                const char* nm = USTR(name);
++                const char* zh = nm ? chtLookup(nm, (int) strlen(nm)) : 0;
++                return zh ? zh : nm;
++            }
++            case DS_PRONOUN: {
++                /* U4 繁中化:NPC 代名詞 He/She/It → 他/她/它(其餘稱謂原樣)。 */
++                const char* pn = USTR(pronoun);
++                if (pn) {
++                    if (!strcasecmp(pn, "He"))  return "他";
++                    if (!strcasecmp(pn, "She")) return "她";
++                    if (!strcasecmp(pn, "It"))  return "它";
++                    if (!strcasecmp(pn, "They")) return "他們";
++                }
++                return pn;
++            }
++            case DS_LOOK: {
++                /* U4 繁中化:NPC look 描述(『汝遇見/汝見到 X』)查表。 */
++                const char* lk = USTR(look);
++                const char* zh = lk ? chtLookup(lk, (int) strlen(lk)) : 0;
++                return zh ? zh : lk;
++            }
++            case DS_QUESTION: {
++                /* U4 繁中化:NPC 的 yes/no 提問。它在 talk 流程中是以 %s 引數
++                 * 嵌入「\n%s\n\nYou say: 」,引數不會被 screenMessageN 查表,故須在此
++                 * 自行 chtLookup(譯文已在 talk_bilingual 的 question 欄 → u4_cht.tab)。 */
++                const char* q = USTR(question);
++                const char* zh = q ? chtLookup(q, (int) strlen(q)) : 0;
++                return zh ? zh : q;
++            }
+             case DS_ANSWER_Y:
+                 if (tlk->questionHumility)
+                     c->party->adjustKarma(KA_BRAGGED);
+diff --git a/src/dungeon.cpp b/src/dungeon.cpp
+index 897ba2c..9b3e1bc 100644
+--- a/src/dungeon.cpp
++++ b/src/dungeon.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include "dungeon.h"
+ 
++#include <cstring>      // U4 繁中化:strlen(物品名查表)
++#include "cht.h"        // U4 繁中化:物品名查表
+ #include "config.h"
+ #include "context.h"
+ #include "debug.h"
+@@ -144,8 +146,10 @@ void dungeonSearch(void) {
+                 if (*item->isItemInInventory != NULL && (*item->isItemInInventory)(item->data))
+                     screenMessage("Nothing Here!\n");
+                 else {
+-                    if (item->name)
+-                        screenMessage("You find...\n%s!\n", item->name);
++                    if (item->name) {
++                        const char* inm = chtLookup(item->name, (int) strlen(item->name));
++                        screenMessage("You find...\n%s!\n", inm ? inm : item->name);
++                    }
+                     (*item->putItemInInventory)(item->data);
+                 }
+             } else
+diff --git a/src/event.cpp b/src/event.cpp
+index 0bef0c9..eba5d66 100644
+--- a/src/event.cpp
++++ b/src/event.cpp
+@@ -10,7 +10,9 @@
+ #include "event.h"
+ 
+ #include "config.h"
++#include "cht.h"
+ #include "context.h"
++#include "game.h"
+ #include "location.h"
+ #include "savegame.h"
+ #include "screen.h"
+@@ -778,7 +780,9 @@ bool AlphaActionController::keyPressed(int key) {
+         value = -1;
+         doneWaiting();
+     } else {
+-        screenMessage("\n%s", prompt.c_str());
++        /* U4 繁中化:重顯提示時查表(Weapon:/Armour:/Spell: → 武器:/護甲:/法術:)。 */
++        const char* zhP = chtLookup(prompt.c_str(), (int) prompt.length());
++        screenMessage("\n%s", zhP ? zhP : prompt.c_str());
+         return EventHandler::defaultKeyHandler(key);
+     }
+     return true;
+@@ -822,6 +826,19 @@ bool EventHandler::globalKeyHandler(int key) {
+         xu4.eventHandler->quitGame();
+         return true;
+ 
++    case U4_FKEY:       /* F1:按鍵說明 */
++        if (c && c->location) {     // 僅遊玩中(intro 無 context)
++            gameShowKeyHelp();
++            return true;
++        }
++        return false;
++
++    case U4_FKEY + 1:   /* F2:遊玩中即時切換 EGA/VGA tileset */
++        return gameToggleGraphics();
++
++    case U4_FKEY + 2:   /* F3:循環 game resolution(scale),tile 物理放大(僅遊玩中)*/
++        return screenCycleScale();
++
+     default:
+         return false;
+     }
+diff --git a/src/event_allegro.cpp b/src/event_allegro.cpp
+index 8f3dce0..5b8bddc 100644
+--- a/src/event_allegro.cpp
++++ b/src/event_allegro.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <cstdio>
+ #include "screen_allegro.h"
++#include "screen.h"        // screenResize(視窗可調大小)
+ #include "event.h"
+ #include "xu4.h"
+ 
+@@ -140,6 +141,12 @@ mouse_event:
+             ie.type = IE_MOUSE_MOVE;
+             goto mouse_pos;
+ 
++        case ALLEGRO_EVENT_DISPLAY_RESIZE:
++            // U4 繁中化:視窗可調大小 — 確認 resize 後更新顯示尺寸並置中遊戲畫面。
++            al_acknowledge_resize(event.display.source);
++            screenResize(event.display.width, event.display.height);
++            break;
++
+         case ALLEGRO_EVENT_DISPLAY_EXPOSE:
+         case ALLEGRO_EVENT_DISPLAY_SWITCH_IN:
+             expose();
+diff --git a/src/game.cpp b/src/game.cpp
+index 5c359b0..2e7479e 100644
+--- a/src/game.cpp
++++ b/src/game.cpp
+@@ -4,8 +4,10 @@
+ 
+ #include "game.h"
+ 
++#include <cstring>      // U4 繁中化:strlen(物品名查表)
+ #include "camp.h"
+ #include "cheat.h"
++#include "cht.h"        // U4 繁中化:物品名查表
+ #include "city.h"
+ #include "config.h"
+ #include "debug.h"
+@@ -418,6 +420,122 @@ void gameUpdateScreen() {
+     }
+ }
+ 
++/*
++ * U4 繁中化:F2 遊玩中即時切換 EGA(Ultima-IV)↔ VGA(U4-Upgrade)tileset。
++ *
++ * 約束:Boron atom(symbol)per-config(各 config 自建 boron env),故 ImageMgr
++ * 與遊戲查表必須同一個 config → 只能整個換 xu4.config(full swap)。
++ *
++ * 但兩 config 的 maps/tiles 邏輯相同(VGA 模組繼承同一份 rules),所以「換 config +
++ * screenReInit(重建 VGA imageMgr/tileset/tileanims)」後,只需把當前 location 堆疊
++ * 的每張 map 與 mapArea 的 tileset『重新指向』新 config 同 ID 的物件,保留座標。
++ * 不用 setMap(避免把新 Location 疊上舊堆疊 → 先前延遲崩潰之源)。
++ * 隊伍/存檔/座標(party、saveGame、coords)config-independent,不受影響。
++ *
++ * 雙 config 並存(不 free,避免懸空):啟動 config 歸入對應槽,另一套首次 configInit。
++ */
++bool gameToggleGraphics() {
++    // U4 繁中化:intro 標題/選單也可預覽切換主題,故只要求 imageMgr 存在;
++    // location 相關更新(map/音樂/訊息)再個別 gate 在 c->location。
++    if (! xu4.imageMgr)
++        return false;
++
++    /* U4 繁中化:F2 主題循環(可擴)。EGA → VGA → FM Towns → 循環。
++       新增主題 = 加一個 extension 模組 + 在此清單加一列。 */
++    static const struct { const char* mod; const char* label; } themes[] = {
++        { "Ultima-IV",  "圖形:EGA" },
++        { "U4-Upgrade", "圖形:VGA" },
++        { "U4-FMTowns", "圖形:FM Towns" },
++        { "U4-Amiga",   "圖形:Amiga" },
++        { "U4-MSX2",    "圖形:MSX2" },
++        { "U4-X68000",  "圖形:X68000" },
++        { "U4-SMS",     "圖形:Sega MS" },
++    };
++    const int N = (int)(sizeof(themes) / sizeof(themes[0]));
++    static Config* cache[8] = { NULL };
++    static int cur = -1;
++
++    if (cur < 0) {                              /* 首次:判斷目前主題(EGA/VGA)*/
++        cur = xu4.imageMgr->usingVGA() ? 1 : 0;
++        cache[cur] = xu4.config;
++    }
++
++    /* 迴圈找下一個「可載入」的主題:缺模組(使用者沒放該平台資產)就跳過,
++       連續多個缺失也能跳過,繞一圈都沒有就維持原狀(return false)。 */
++    int nxt = cur;
++    for (int tries = 0; tries < N - 1; ++tries) {
++        nxt = (nxt + 1) % N;
++        if (! cache[nxt]) {
++            /* 先確認模組檔存在再 configInit;否則 configInit 對缺檔會直接
++               errorFatal("Cannot find module ...") 殺掉程式(實測:遊戲中/intro
++               F2 循環到未打包的 FM Towns/MSX2/… 主題即崩潰)。 */
++            if (! configModuleExists(themes[nxt].mod))
++                continue;                       /* 缺模組 → 跳過該主題 */
++            cache[nxt] = configInit(themes[nxt].mod, xu4.settings->soundtrack);
++        }
++        if (cache[nxt]) break;                  /* 找到可用主題 */
++    }
++    if (nxt == cur || ! cache[nxt]) return false;   /* 沒有其他可用主題 */
++
++    cur = nxt;
++    xu4.config = cache[cur];
++    screenReInit();     // → screenInit_data → screenSetThemeTitle:視窗標題自動更新為新主題
++
++    /* 遊戲中(有 location)才更新地圖堆疊 / 音樂 / 訊息;intro 預覽時 c 為 NULL,
++       由呼叫端(IntroController)負責重載 intro 美術並重畫。 */
++    if (c && c->location) {
++        /* U4 繁中化:不要把 loc->map 換成新 config 的 map 物件 —— 那是另一個 Map,
++           自帶空的 objects deque,會丟掉現場 runtime 物件(NPC/怪物/party 觸發物)→
++           切換主題後現場人物全消失。改成只把『同一張 map』的 tileset 指標換成新 config
++           的 tileset:地圖資料與所有物件原封不動,只換繪製用的圖塊集。Object 存的是
++           MapTile(id),與 config 無關,渲染時用新 tileset 查 id → 圖會跟著主題變。 */
++        const Tileset* nts = xu4.config->tileset();
++        for (Location* loc = c->location; loc; loc = loc->prev)
++            loc->map->tileset = nts;
++        xu4.game->mapArea.reinit(); /* mapArea.tileset 重新指向新 config 的 tileset */
++
++        /* U4 繁中化:音樂跟主題切換 —— 各主題用自己 config 的音樂(EGA/VGA=DOS、
++           FM Towns=CD 音軌;無自訂音樂的主題沿用父模組 DOS 音樂)。musicStop 重置
++           currentTrack,musicPlayLocale 才會從新 config 重載當前 map 的音樂。 */
++        musicStop();
++        musicPlayLocale();
++
++        screenMessage("\n%s\n", themes[cur].label);
++        gameUpdateScreen();
++    }
++    return true;
++}
++
++/*
++ * U4 繁中化:F1 按鍵說明。分兩頁印到訊息區(screenMessage 全遊戲共用、CJK 穩定),
++ * 每頁按任意鍵續;結束後下一個動作會 gameUpdateScreen 還原。鍵位沿用 U4 單字母助記。
++ */
++void gameShowKeyHelp() {
++    screenMessage("\n操作說明 1/2\n");
++    screenMessage("方向鍵 移動\n");
++    screenMessage("A攻擊 B登乘\n");
++    screenMessage("C施法 E進入\n");
++    screenMessage("F開火 G取得\n");
++    screenMessage("H紮營 J撬鎖\n");
++    screenMessage("K攀爬 L定位\n");
++    screenMessage("空白鍵 通過\n");
++    screenMessage("\n按任意鍵續\n");
++    EventHandler::waitAnyKey();
++
++    screenMessage("\n操作說明 2/2\n");
++    screenMessage("M調藥 O開啟\n");
++    screenMessage("P凝視 Q存退\n");
++    screenMessage("R裝備 S搜尋\n");
++    screenMessage("T交談 U使用\n");
++    screenMessage("W穿戴 X離開\n");
++    screenMessage("Y呼喊 Z狀態\n");
++    screenMessage("F1說明 F2主題\n");
++    screenMessage("F3縮放\n");
++    screenMessage("\n按任意鍵\n");
++    EventHandler::waitAnyKey();
++    screenPrompt();
++}
++
+ void GameController::setMap(Map *map, bool saveLocation, const Portal *portal, TurnController *turnCompleter) {
+     int viewMode;
+     LocationContext context;
+@@ -1183,8 +1301,10 @@ bool GameController::keyPressed(int key) {
+                     if (*item->isItemInInventory != NULL && (*item->isItemInInventory)(item->data))
+                         screenMessage("%cNothing Here!%c\n", FG_GREY, FG_WHITE);
+                     else {
+-                        if (item->name)
+-                            screenMessage("You find...\n%s!\n", item->name);
++                        if (item->name) {
++                            const char* inm = chtLookup(item->name, (int) strlen(item->name));
++                            screenMessage("You find...\n%s!\n", inm ? inm : item->name);
++                        }
+                         (*item->putItemInInventory)(item->data);
+                     }
+                 } else
+@@ -3452,7 +3572,7 @@ showMixturesSuper(int page = 0) {
+ 
+     const Spell *s = getSpell(i + 13 * page);
+     int line = i + 8;
+-    screenTextAt(2, line, "%s", s->name);
++    screenTextAt(2, line, "%s", spellGetName(i + 13 * page));  // U4 繁中化:官方法術名
+ 
+     screenTextAt(6, line, "%3u", c->saveGame->mixtures[i + 13 * page]);
+ 
+diff --git a/src/game.h b/src/game.h
+index 69ca236..97657e2 100644
+--- a/src/game.h
++++ b/src/game.h
+@@ -111,6 +111,8 @@ private:
+ /* map and screen functions */
+ void gameSetViewMode(ViewMode newMode);
+ void gameUpdateScreen();
++bool gameToggleGraphics();      /* U4 繁中化:F2 遊玩中即時切換 EGA/VGA tileset */
++void gameShowKeyHelp();         /* U4 繁中化:F1 顯示按鍵說明 */
+ 
+ /* spell functions */
+ void castSpell(int player = -1);
+diff --git a/src/gamebrowser.cpp b/src/gamebrowser.cpp
+index 73bf48a..90a9ac6 100644
+--- a/src/gamebrowser.cpp
++++ b/src/gamebrowser.cpp
+@@ -454,10 +454,10 @@ void GameBrowser::layout()
+ 
+     *data++ = gbox;
+     *data++ = "xu4 | ";
+-    *data++ = "Game Modules";
+-    *data++ = "Play";
+-    *data++ = "Quit";
+-    *data   = "Cancel";
++    *data++ = "遊戲模組";
++    *data++ = "開始";
++    *data++ = "離開";
++    *data   = "取消";
+ 
+     TxfDrawState ds;
+     ds.fontTable = ss->fontTable;
+diff --git a/src/gpu_opengl.cpp b/src/gpu_opengl.cpp
+index 882a30c..e3965cf 100644
+--- a/src/gpu_opengl.cpp
++++ b/src/gpu_opengl.cpp
+@@ -574,7 +574,7 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
+ 
+     // Create screen, white, noise & shadow textures.
+     glGenTextures(TEXTURE_COUNT, &gr->screenTex);
+-    gpu_defineTex(gr->screenTex, 320, 200, NULL,
++    gpu_defineTex(gr->screenTex, 960, 600, NULL,   // U4 繁中化 C:3x regime
+ #if defined(ANDROID) || defined(USE_GLES)
+                   GL_RGBA,  // Must match glTexSubImage2D format.
+ #else
+@@ -660,7 +660,7 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
+ 
+         glUseProgram(sh);
+         glUniform2f(mmap, (float) w, (float) h);
+-        glUniform2f(gr->slocScDim, 320.0f, 200.0f);
++        glUniform2f(gr->slocScDim, 960.0f, 600.0f);   // U4 繁中化 C:3x regime
+         glUniform1i(cmap, GTU_CMAP);
+     }
+     }
+diff --git a/src/imagemgr.cpp b/src/imagemgr.cpp
+index a7cd166..f62678a 100644
+--- a/src/imagemgr.cpp
++++ b/src/imagemgr.cpp
+@@ -489,6 +489,14 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
+     }
+ #endif
+ 
++    /* U4 繁中化:若此 info 先前已 2x 過(freeResourceGroup 釋放 image 後重載,
++       width/height 仍是 ×2 後的值),還原成原始 raw 尺寸,否則 loadImage 會用
++       錯誤尺寸解碼定長格式(u4rle/u4raw)→「Can't load image」→ gameplay 背景空白。 */
++    if (info->scaled2x) {
++        info->width  = info->rawWidth;
++        info->height = info->rawHeight;
++    }
++
+     U4FILE *file = getImageFile(info);
+     Image *unscaled = NULL;
+     if (file) {
+@@ -609,6 +617,36 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
+     unscaled->save(out2.append("-fixup.ppm").c_str());
+ #endif
+ 
++    /* U4 繁中化 C:全美術 3x(960×600 regime;RGBA 保留來源像素,nearest 放大)。
++       CJK 用 24×24 點陣字,底圖 crisp 放大不糊(rule 81)。 */
++    {
++        const int S = 3;
++        int sw = unscaled->width(), sh = unscaled->height();
++        Image* big = Image::create(sw * S, sh * S);
++        for (int yy = 0; yy < sh; ++yy)
++            for (int xx = 0; xx < sw; ++xx) {
++                RGBA c; unscaled->getPixel(xx, yy, c);
++                for (int dy = 0; dy < S; ++dy)
++                    for (int dx = 0; dx < S; ++dx)
++                        big->putPixel(xx*S+dx, yy*S+dy, c.r, c.g, c.b, c.a);
++            }
++        delete unscaled;
++        unscaled = big;
++        /* reload-safe:首次放大時記錄原始尺寸並放大 subImages;重載(scaled2x 已設)
++           時 subImages 仍是上次放大後的值,不可再次放大,只需重設 width/height。 */
++        if (! info->scaled2x) {
++            info->rawWidth  = info->width;
++            info->rawHeight = info->height;
++            SubImage* si = (SubImage*) info->subImages;
++            for (int i = 0; i < info->subImageCount; ++i) {
++                si[i].x *= S; si[i].y *= S; si[i].width *= S; si[i].height *= S;
++            }
++            info->scaled2x = 1;
++        }
++        info->width  = info->rawWidth  * S;
++        info->height = info->rawHeight * S;
++    }
++
+     info->image = unscaled;
+     //info->tex = gpu_makeTexture(info->image);
+ 
+@@ -700,6 +738,8 @@ ImageInfo::ImageInfo() {
+     tileTexCoord = NULL;
+     subImageCount = 0;
+     subImages = NULL;
++    rawWidth = rawHeight = 0;    /* U4 繁中化:2x reload-safe */
++    scaled2x = 0;
+ }
+ 
+ ImageInfo::~ImageInfo() {
+diff --git a/src/imagemgr.h b/src/imagemgr.h
+index fd2d981..a309fe5 100644
+--- a/src/imagemgr.h
++++ b/src/imagemgr.h
+@@ -162,8 +162,10 @@ public:
+     uint16_t resGroup;          /**< resource group */
+     uint16_t tiles;             /**< used to scale the without bleeding colors between adjacent tiles */
+     int16_t width, height;
++    int16_t rawWidth, rawHeight; /**< U4 繁中化:2x 前原始尺寸,供重載時正確解碼 raw */
+     int16_t subImageCount;
+     uint8_t depth;
++    uint8_t scaled2x;           /**< U4 繁中化:此 info 的 subImages 已 2x(避免重載重複放大)*/
+     uint8_t filetype;
+     uint8_t fixup;              /**< a routine to do miscellaneous fixes to the image */
+     Image *image;               /**< the image we're describing */
+diff --git a/src/intro.cpp b/src/intro.cpp
+index acdf1f7..1580708 100644
+--- a/src/intro.cpp
++++ b/src/intro.cpp
+@@ -11,6 +11,8 @@
+ 
+ #include "debug.h"
+ #include "error.h"
++#include "event.h"     // U4_FKEY(F2/F3)
++#include "game.h"      // gameToggleGraphics(intro 預覽切主題)
+ #include "imagemgr.h"
+ #include "sound.h"
+ #include "party.h"
+@@ -20,6 +22,7 @@
+ #include "u4file.h"
+ #include "utils.h"
+ #include "xu4.h"
++#include "cht.h"      // U4 繁中化
+ 
+ #ifdef GPU_RENDER
+ extern bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile);
+@@ -33,9 +36,12 @@ using namespace std;
+ #define INTRO_MAP_HEIGHT 5
+ #define INTRO_MAP_WIDTH 19
+ #define INTRO_TEXT_X 0
+-#define INTRO_TEXT_Y 19
++/* U4 繁中化:中文故事/吉普賽提問換行較多(7–8 行),原 6 列文字區會溢出。
++   文字區底部仍對齊 400px,起點上移 19→17 → 8 列容納中文段落(配合
++   textview.cpp 的防越界 clip,徹底解決 intro 第 3 段 7 行崩潰)。 */
++#define INTRO_TEXT_Y 17
+ #define INTRO_TEXT_WIDTH 40
+-#define INTRO_TEXT_HEIGHT 6
++#define INTRO_TEXT_HEIGHT 8
+ 
+ #define GYP_PLACES_FIRST 0
+ #define GYP_PLACES_TWOMORE 1
+@@ -174,7 +180,9 @@ IntroController::IntroController() :
+     binData(NULL),
+     titles(),                   // element list
+     title(titles.begin()),      // element iterator
+-    bSkipTitles(false)
++    bSkipTitles(false),
++    reloadingTheme(false),
++    menuIndex(2)                // 預設停在「開始新遊戲」
+ {
+     // initialize menus
+     confMenu.setTitle("XU4 Configuration:", 0, 0);
+@@ -388,6 +396,16 @@ bool IntroController::hasInitiatedNewGame()
+  * Frees up data not needed after introduction.
+  */
+ void IntroController::deleteIntro() {
++    // U4 繁中化:F2 在片頭播放中(INTRO_TITLES)重載時,titles 動畫向量持有的
++    // srcImage/destImage 必須在此釋放並清空,否則 init() 在 bSkipTitles 下跳過
++    // initTitles,舊向量殘留(懸空/洩漏);原本只在解構子清,F2 路徑漏掉。
++    for (unsigned i = 0; i < titles.size(); i++) {
++        delete titles[i].srcImage;
++        delete titles[i].destImage;
++    }
++    titles.clear();
++    title = titles.begin();
++
+     delete binData;
+     binData = NULL;
+ 
+@@ -416,6 +434,53 @@ uint8_t *IntroController::getSigData() {
+ bool IntroController::keyPressed(int key) {
+     bool valid = true;
+ 
++    /* U4 繁中化:在標題場景 / 主選單可預覽切換主題(F2)與縮放(F3)。切換會 screenReInit /
++       換模組 → imageMgr 重建使 intro 快取的美術懸空,故須 deleteIntro()+init() 重載;
++       設 bSkipTitles 讓重載後停在主選單(不重播片頭)。角色創建走另一條阻塞輸入流,
++       不會進到這裡,故不影響創角。 */
++    // 攔截所有 intro 顯示模式(TITLES/MAP/MENU)的 F2/F3,務必 return true,否則會漏到
++    // global key handler 的 gameToggleGraphics(已放寬守衛)→ 切主題但不重載 intro →
++    // 懸空崩潰(實測:片頭按 F2 後再按任意鍵即 crash)。keyPressed 只在 intro 主迴圈呼叫,
++    // 角色創建走另一條輸入流,故不影響創角。
++    if (key == U4_FKEY + 1 || key == U4_FKEY + 2) {
++        if (getenv("U4CHT_DEBUG"))
++            fprintf(stderr, "[DBG] intro F%d pressed, mode=%d\n",
++                    key == U4_FKEY + 1 ? 2 : 3, (int)mode);
++        // U4 繁中化:整個重載期間設 reloadingTheme,擋掉 re-entrant 的 timerFired 與
++        // inputEvent。關鍵 —— init() 會早早把 binData 設非 NULL,故 binData guard 不足以
++        // 涵蓋重載中段;init 內 musicPlay/updateScreen 會 pump 事件,re-entrant 的繪製/
++        // 滑鼠會踩到半重建狀態(charset/beasties/tile 快取指標懸空)→ segfault。
++        reloadingTheme = true;
++        // 先設安全 mode + 關 beasties,避免重載期間計時器畫到正在釋放的資源。
++        // 再釋放 intro 資源(此時舊 imageMgr 仍有效),才做會重建 imageMgr 的切換,
++        // 最後 init() 用新 imageMgr 重載(init 內含 mapArea.reinit 等)。
++        mode = INTRO_MENU;
++        beastiesVisible = false;
++        deleteIntro();                      // binData=NULL → 期間 timerFired 會被 guard 跳過
++        if (key == U4_FKEY + 1) {
++            gameToggleGraphics();           // 切下一個可用主題(含 screenReInit;
++                                            // 缺主題則無切換但 imageMgr 不變,init 仍重載)
++        } else {
++            int s = xu4.settings->scale + 1;
++            if (s > 4) s = 1;
++            xu4.settings->scale = s;
++            screenReInit();
++        }
++        if (getenv("U4CHT_DEBUG"))
++            fprintf(stderr, "[DBG] F2 after switch: mgr=%p (pre-init)\n",
++                    (void*)xu4.imageMgr);
++        bSkipTitles = true;
++        init();
++        if (getenv("U4CHT_DEBUG"))
++            fprintf(stderr, "[DBG] F2 after init: mgr=%p beastiesImg=%p img=%p mode=%d vis=%d\n",
++                    (void*)xu4.imageMgr, (void*)beastiesImg,
++                    beastiesImg ? (void*)beastiesImg->image : NULL,
++                    (int)mode, (int)beastiesVisible);
++        reloadingTheme = false;             // 重載完成,恢復正常繪製/輸入
++        updateScreen();
++        return true;
++    }
++
+     switch (mode) {
+ 
+     case INTRO_TITLES:
+@@ -431,6 +496,20 @@ bool IntroController::keyPressed(int key) {
+ 
+     case INTRO_MENU:
+         switch (key) {
++        // U4 繁中化:鍵盤上下移動光棒 + Enter 選取(原本只能按各項首字母 / 滑鼠點)。
++        case U4_UP:
++            menuIndex = (menuIndex + 4) % 5;
++            updateScreen();
++            break;
++        case U4_DOWN:
++            menuIndex = (menuIndex + 1) % 5;
++            updateScreen();
++            break;
++        case U4_ENTER: {
++            static const char menuKey[] = "rjica";  // 對齊選單項順序(返回/啟程/新遊戲/設定/關於)
++            keyPressed(menuKey[menuIndex]);
++            break;
++        }
+         case 'i':
+             initiateNewGame();
+             break;
+@@ -487,18 +566,26 @@ bool IntroController::keyPressed(int key) {
+ }
+ 
+ bool IntroController::inputEvent(const InputEvent* ev) {
++    if (reloadingTheme)         // 重載中:忽略 re-entrant 滑鼠輸入(會觸發 updateScreen 踩懸空 charset)
++        return true;
+     if (ev->type == IE_MOUSE_PRESS && ev->n == CMOUSE_LEFT)
+     {
++        if (getenv("U4CHT_DEBUG"))
++            fprintf(stderr, "[DBG] intro mouse L-press, mode=%d, x=%d y=%d, binData=%p\n",
++                    (int)mode, ev->x, ev->y, (void*)binData);
+         if (mode == INTRO_TITLES || mode == INTRO_MAP)
+             keyPressed(U4_SPACE);
+         else if (mode == INTRO_MENU) {
+             int cx, cy;
+             menuArea.mouseTextPos(ev->x, ev->y, cx, cy);
++            if (getenv("U4CHT_DEBUG"))
++                fprintf(stderr, "[DBG]   menu click cell cx=%d cy=%d\n", cx, cy);
+ 
+             // Matches text position in updateScreen().
+             if (cx >= 10 && cx <= 28) {
+                 if (cy >= 5 && cy <= 9) {
+                     static const char menuKey[] = "rjica";
++                    menuIndex = cy - 5;     // 光棒跟著滑鼠點擊同步
+                     keyPressed( menuKey[cy - 5] );
+                 }
+             }
+@@ -644,6 +731,18 @@ void IntroController::drawMapAnimated() {
+  * Draws the animated beasts in the upper corners of the screen.
+  */
+ void IntroController::drawBeasties() {
++    /* U4 繁中化:每幀從『目前』imageMgr 重抓 beastiesImg。主題切換(F2)的 screenReInit
++       會 new ImageMgr,使 init() 當時快取的 beastiesImg 懸空 → ImageView::draw 在
++       info->image deref 崩潰(實測 backtrace)。重抓的指標必屬現用 imageMgr,絕不懸空;
++       拿不到(NULL)或 image 未就緒就跳過這幀,不畫。 */
++    ImageInfo* cur = xu4.imageMgr->get(BKGD_ANIMATE);
++    if (getenv("U4CHT_DEBUG"))
++        fprintf(stderr, "[DBG] drawBeasties: cached=%p refetch=%p img=%p mgr=%p mode=%d vis=%d\n",
++                (void*)beastiesImg, (void*)cur, cur ? (void*)cur->image : NULL,
++                (void*)xu4.imageMgr, (int)mode, (int)beastiesVisible);
++    beastiesImg = cur;
++    if (! beastiesImg || ! beastiesImg->image)
++        return;                 // 主題缺 beasties 或切換懸空 → 不畫,避免崩潰
+     drawBeastie(0, beastieOffset, binData->beastie1FrameTable[beastie1Cycle]);
+     drawBeastie(1, beastieOffset, binData->beastie2FrameTable[beastie2Cycle]);
+     if (beastieOffset < 0)
+@@ -661,7 +760,7 @@ void IntroController::drawBeastie(int beast, int vertoffset, int frame) {
+     ASSERT(beast == 0 || beast == 1, "invalid beast: %d", beast);
+ 
+     backgroundArea.draw(beastiesImg, beastieSub[beast] + frame,
+-                        beast ? (320 - 48) : 0,
++                        beast ? (U4_SCREEN_W - 144) : 0,   // U4 繁中化 C:3x(48→144)
+                         vertoffset);
+ }
+ 
+@@ -721,7 +820,27 @@ void IntroController::drawCard(int card, int x, int y) {
+     };
+     ASSERT(card < 8, "invalid card: %d", card);
+ 
+-    backgroundArea.draw(xu4.config->intern(cardNames[card]), x, y);
++    Symbol sym = xu4.config->intern(cardNames[card]);
++    backgroundArea.draw(sym, x, y);
++
++    /* U4 繁中化:疊中文德目名於卡底橫幅(對 EGA/VGA 卡牌皆有效,免改美術)。 */
++    static const char* const virtueZh[] = {
++        "誠實", "慈悲", "勇氣", "正義", "犧牲", "榮譽", "靈性", "謙卑"
++    };
++    const SubImage* csub = NULL;
++    xu4.imageMgr->imageInfo(sym, &csub);
++    if (csub) {
++        int cw = csub->width, ch = csub->height;
++        // 原英文卡名橫幅含「白字行」位於中文上方約一個字高;遮罩板須向上多蓋一行
++        // 才能完全壓掉英文(實測:英文白字距卡底比中文高 ~CHAR_HEIGHT)。
++        int plateH = 2 * CHAR_HEIGHT + 10;             // 夠高:同時蓋英文行 + 中文行
++        int py = y + ch - plateH - 3;                  // 板底貼齊卡底橫幅
++        int nameW = 2 * CHAR_WIDTH;                     // 德目名皆 2 字
++        int nx = x + (cw - nameW) / 2;
++        xu4.screenImage->fillRect(x + 4, py, cw - 8, plateH, 16, 12, 22);
++        // 中文錨在板下緣(原中文位置),非置中,避免被加高的板往上推
++        screenDrawCJKPixel(virtueZh[card], nx, py + plateH - CHAR_HEIGHT - 6);
++    }
+ }
+ 
+ /**
+@@ -753,6 +872,18 @@ void IntroController::updateScreen() {
+         backgroundArea.draw(BKGD_INTRO);
+         drawMap();
+         drawBeasties();
++        // U4 繁中化:標題畫面提示新手「按任意鍵開始」(INTRO_MAP 下任意鍵 → 主選單)。
++        // 置中於下方、profile 名上方;閃爍由 introHintTick 驅動(updateScreen 反覆重畫時),
++        // 落在熄滅相位也至少每輪短暫顯示,靜態情況則恆顯示。
++        {
++            static unsigned introHintTick = 0;
++            if (((++introHintTick >> 4) & 1) == 0) {
++                const char* hint = "按任意鍵開始";          // 6 個全形字
++                int hintW = 6 * CHAR_WIDTH;
++                screenDrawCJKPixel(hint, (U4_SCREEN_W - hintW) / 2,
++                                   U4_SCREEN_H - 4 * CHAR_HEIGHT);
++            }
++        }
+         // display the profile name if a local profile is being used
+         {
+         const string& pname = xu4.settings->profile;
+@@ -764,7 +895,7 @@ void IntroController::updateScreen() {
+     case INTRO_MENU:
+         // draw the extended background for all option screens
+         backgroundArea.draw(BKGD_INTRO);
+-        backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++        backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ 
+         // if there is an error message to display, show it
+         if (xu4.errorMessage)
+@@ -780,7 +911,7 @@ void IntroController::updateScreen() {
+             EventHandler::wait_msecs(3000);
+             // clear the screen again
+             backgroundArea.draw(BKGD_INTRO);
+-            backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++            backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+         }
+ 
+         menuArea.textAt(1,  1, "In another world, in a time to come.");
+@@ -792,8 +923,10 @@ void IntroController::updateScreen() {
+         menuArea.textAtKey(10, 9, "About", 0);
+         drawBeasties();
+ 
+-        // draw the cursor last
+-        screenSetCursorPos(24, 16);
++        // U4 繁中化:光棒 —— 把游標放在目前選取項左側(隨鍵盤上下移動),取代原本固定
++        // 在右上角的游標,讓使用者看得出選到哪一項。選單項在 menuArea 的 (10, 5..9)。
++        menuArea.setCursorPos(8, 5 + menuIndex);
++        menuArea.showCursor();
+         break;
+ 
+     default:
+@@ -808,7 +941,7 @@ void IntroController::updateScreen() {
+ void IntroController::initiateNewGame() {
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_INTRO);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ 
+     // display name prompt and read name from keyboard
+     menuArea.textAt(3, 3, "By what name shalt thou be known");
+@@ -831,7 +964,7 @@ void IntroController::initiateNewGame() {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_INTRO);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ 
+     // display sex prompt and read sex from keyboard
+     menuArea.textAt(3, 3, "Art thou Male or Female?");
+@@ -1035,14 +1168,21 @@ void IntroController::startQuestions() {
+         questionArea.textAt(0, 1, gypsyText[GYP_UPON_TABLE].c_str());
+         EventHandler::wait_msecs(1000);
+ 
+-        const string& virtue1 = gypsyText[questionTree[i1] + 4];
+-        questionArea.textAtFmt(0, 2, "%s and", virtue1.c_str());
++        /* U4 繁中化:吉普賽報牌句改用中文德目名 + 中文連接(原本用 gypsyText 的英文
++           德目名 + " and "/" She says" 英文字面,且 virtue1.size()+4 是 byte 數,CJK
++           定位也錯)。德目名對齊 drawCard 的 virtueZh。 */
++        static const char* const virtueZh[] = {
++            "誠實", "慈悲", "勇氣", "正義", "犧牲", "榮譽", "靈性", "謙卑"
++        };
++        const char* v1 = virtueZh[questionTree[i1] & 7];
++        const char* v2 = virtueZh[questionTree[i2] & 7];
++        questionArea.textAtFmt(0, 2, "%s 與", v1);
+         drawCard(questionTree[i1], cardPos->x, cardPos->y);
+         EventHandler::wait_msecs(1000);
+ 
+         soundSpeakLine(VOICE_GYPSY, 3);
+-        questionArea.textAtFmt(virtue1.size() + 4, 2, " %s.  She says",
+-                               gypsyText[questionTree[i2] + 4].c_str());
++        // 重畫整行(中文不便逐段定位):「誠實 與 正義。她說道:」
++        questionArea.textAtFmt(0, 2, "%s 與 %s。她說道:", v1, v2);
+         drawCard(questionTree[i2], cardPos->x + cardPos->width, cardPos->y);
+         questionArea.textAt(0, 3, "\"Consider this:\"");
+         questionArea.showCursor();
+@@ -1103,7 +1243,7 @@ void IntroController::journeyOnward() {
+ void IntroController::about() {
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_INTRO);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ 
+     screenHideCursor();
+     menuArea.textAtFmt(14, 1, "XU4 %s", VERSION);
+@@ -1125,7 +1265,9 @@ void IntroController::about() {
+  * Shows text in the question area.
+  */
+ void IntroController::showText(const string &text) {
+-    string current = text;
++    /* U4 繁中化:intro 故事整段查表(key 含 \n),命中用中文再逐行渲染 */
++    const char* zh = chtLookup(text.c_str(), (int) text.length());
++    string current = zh ? zh : text;
+     int lineNo = 0;
+ 
+     questionArea.clear();
+@@ -1166,6 +1308,12 @@ void IntroController::runMenu(Menu *menu, TextView *view, bool withBeasties) {
+  * map, the beasties, etc..
+  */
+ void IntroController::timerFired() {
++    // U4 繁中化:F2/F3 預覽切換會 deleteIntro()+init() 重載,期間 init 內 musicPlay/
++    // updateScreen 可能 pump event 使本計時器 re-entrant 觸發。此時 binData 已釋放/
++    // 正在重建,updateTitle/drawMap 會 deref 懸空 tile 影像而 segfault。binData 為 NULL
++    // 即跳過這一拍。
++    if (! binData || reloadingTheme)        // 重載中:擋掉 re-entrant 繪製(快取指標半懸空)
++        return;
+     screenCycle();
+ 
+     if (mode == INTRO_TITLES)
+@@ -1270,7 +1418,7 @@ void IntroController::updateConfMenu(MenuEvent &event) {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ }
+ 
+ void IntroController::updateVideoMenu(MenuEvent &event) {
+@@ -1307,7 +1455,7 @@ void IntroController::updateVideoMenu(MenuEvent &event) {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ }
+ 
+ void IntroController::updateGfxMenu(MenuEvent &event)
+@@ -1327,7 +1475,7 @@ void IntroController::updateGfxMenu(MenuEvent &event)
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ }
+ 
+ void IntroController::updateSoundMenu(MenuEvent &event) {
+@@ -1361,7 +1509,7 @@ void IntroController::updateSoundMenu(MenuEvent &event) {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ }
+ 
+ void IntroController::updateInputMenu(MenuEvent &event) {
+@@ -1389,7 +1537,7 @@ void IntroController::updateInputMenu(MenuEvent &event) {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ 
+     // after drawing the menu, extra menu text can be added here
+     extendedMenuArea.textAt(0, 5, "Mouse Options:");
+@@ -1420,7 +1568,7 @@ void IntroController::updateSpeedMenu(MenuEvent &event) {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ }
+ 
+ void IntroController::updateGameplayMenu(MenuEvent &event) {
+@@ -1444,7 +1592,7 @@ void IntroController::updateGameplayMenu(MenuEvent &event) {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ }
+ 
+ void IntroController::updateInterfaceMenu(MenuEvent &event) {
+@@ -1468,7 +1616,7 @@ void IntroController::updateInterfaceMenu(MenuEvent &event) {
+ 
+     // draw the extended background for all option screens
+     backgroundArea.draw(BKGD_OPTIONS_TOP, 0, 0);
+-    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
++    backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 360);
+ 
+     // after drawing the menu, extra menu text can be added here
+     extendedMenuArea.textAt(2, 3, "  (Open, Jimmy, etc.)");
+@@ -1703,8 +1851,8 @@ void IntroController::initTitles()
+ void IntroController::addTitle(int x, int y, int w, int h, AnimType method, int delay, int duration)
+ {
+     AnimElement data = {
+-        x, y,               // source x and y
+-        w, h,               // source width and height
++        x * 3, y * 3,       // U4 繁中化 C:3x(抽取/destImage/落點皆 960 space)
++        w * 3, h * 3,       // source width and height
+         method,             // render method
+         0,                  // animStep
+         0,                  // animStepMax
+@@ -1777,8 +1925,8 @@ void IntroController::getTitleSourceData()
+                         color = info->image->setColor(255, (y == 2 ? 250 : 255), blue[y-1]);
+                     }
+                     AnimPlot plot = {
+-                        uint8_t(x),
+-                        uint8_t(y),
++                        int16_t(x * 3),     // U4 繁中化 C:3x 位置(漸層仍用 1x y)
++                        int16_t(y * 3),
+                         uint8_t(color.r),
+                         uint8_t(color.g),
+                         uint8_t(color.b),
+@@ -1800,15 +1948,15 @@ void IntroController::getTitleSourceData()
+             {
+                 for (int y=0; y < titles[i].rh; y++)
+                 {
+-                    // Here x is set to exclude PRESENT at top of image.
+-                    int x = (y < 6) ? 133 : 0;
++                    // Here x is set to exclude PRESENT at top of image.(U4 繁中化 B:2x)
++                    int x = (y < 12) ? 266 : 0;
+                     for ( ; x < titles[i].rw ; x++)
+                     {
+                         titles[i].srcImage->getPixel(x, y, r, g, b, a);
+                         if (r || g || b)
+                         {
+                             AnimPlot plot = {
+-                                uint8_t(x+1), uint8_t(y+1),
++                                int16_t(x+1), int16_t(y+1),
+                                 uint8_t(r), uint8_t(g), uint8_t(b), uint8_t(a)
+                             };
+                             titles[i].plotData.push_back(plot);
+@@ -1904,12 +2052,12 @@ bool IntroController::updateTitle()
+         {
+             while (animStepTarget > title->animStep)
+             {
+-                // blit the pixel-pair to the src surface
++                // blit the signature point(U4 繁中化 C:3x → 6x3)
+                 title->destImage->fillRect(
+                     title->plotData[title->animStep].x,
+                     title->plotData[title->animStep].y,
+-                    2,
+-                    1,
++                    6,
++                    3,
+                     title->plotData[title->animStep].r,
+                     title->plotData[title->animStep].g,
+                     title->plotData[title->animStep].b);
+diff --git a/src/intro.h b/src/intro.h
+index c21ef93..ae81e3f 100644
+--- a/src/intro.h
++++ b/src/intro.h
+@@ -230,6 +230,8 @@ private:
+     int beastieOffset;
+     int beastieSub[2];
+     bool beastiesVisible;
++    bool reloadingTheme;        // U4 繁中化:F2 主題重載期間,擋掉 re-entrant 繪製/輸入
++    int menuIndex;              // U4 繁中化:主選單目前選取項(0-4),供鍵盤上下 + 光棒
+     int sleepCycles;
+     int scrPos;  /* current position in the script table */
+ #ifdef GPU_RENDER
+@@ -257,7 +259,7 @@ private:
+     };
+ 
+     struct AnimPlot {
+-        uint8_t x, y;
++        int16_t x, y;           // U4 繁中化 B:uint8→int16 容 640 座標
+         uint8_t r, g, b, a;
+     };
+ 
+diff --git a/src/names.cpp b/src/names.cpp
+index 8807b88..a0a1dbb 100644
+--- a/src/names.cpp
++++ b/src/names.cpp
+@@ -2,26 +2,35 @@
+  * $Id$
+  */
+ 
++#include <cstring>
++#include <string>
+ #include "names.h"
++#include "cht.h"      // U4 繁中化:職業/試劑/美德/物品/方向名查表
++
++/* chtLookup 命中回傳常駐指標;未命中回傳原英文。 */
++static inline const char* CHT(const char* s) {
++    const char* z = s ? chtLookup(s, (int) strlen(s)) : 0;
++    return z ? z : s;
++}
+ 
+ const char *getClassName(ClassType klass) {
+     switch (klass) {
+     case CLASS_MAGE:
+-        return "Mage";
++        return CHT("Mage");
+     case CLASS_BARD:
+-        return "Bard";
++        return CHT("Bard");
+     case CLASS_FIGHTER:
+-        return "Fighter";
++        return CHT("Fighter");
+     case CLASS_DRUID:
+-        return "Druid";
++        return CHT("Druid");
+     case CLASS_TINKER:
+-        return "Tinker";
++        return CHT("Tinker");
+     case CLASS_PALADIN:
+-        return "Paladin";
++        return CHT("Paladin");
+     case CLASS_RANGER:
+-        return "Ranger";
++        return CHT("Ranger");
+     case CLASS_SHEPHERD:
+-        return "Shepherd";
++        return CHT("Shepherd");
+     default:
+         return "???";
+     }
+@@ -35,11 +44,15 @@ const char *getReagentName(Reagent reagent) {
+     };
+ 
+     if (reagent < REAG_MAX)
+-        return reagentNames[reagent - REAG_ASH];
++        return CHT(reagentNames[reagent - REAG_ASH]);
+     else
+         return "???";
+ }
+ 
++/* U4 繁中化:美德名 *不* 翻譯,回傳英文 canonical。
++ * 因為它同時用於「玩家輸入比對」(聖壇冥想 / codex / 城堡 / item)與「縮寫首字母」
++ * (stats `[0]`)—— 玩家無法於遊戲中輸入中文,且中文 UTF-8 的 [0] 是半個位元組會壞。
++ * 顯示請改用 getDisplayVirtueName()(中文(英文))。詳見 docs/cht-boron-cjk.md「輸入比對」。 */
+ const char *getVirtueName(Virtue virtue) {
+     static const char * const virtueNames[] = {
+         "Honesty", "Compassion", "Valor",
+@@ -48,19 +61,38 @@ const char *getVirtueName(Virtue virtue) {
+     };
+ 
+     if (virtue < 8)
+-        return virtueNames[virtue - VIRT_HONESTY];
++        return CHT(virtueNames[virtue - VIRT_HONESTY]);
+     else
+         return "???";
+ }
+ 
++/* U4 繁中化:顯示用美德名「中文(英文)」,如「正義(Justice)」。用於需要玩家
++ * 知道對應英文以利輸入的情境(聖壇名等)。無譯時退回純英文。 */
++const char *getDisplayVirtueName(Virtue virtue) {
++    /* 每個 virtue 一個穩定 buffer:避免同一 full-expression 內呼叫兩次(如一個
++     * printf 放兩個 getDisplayVirtueName)時,後者覆寫前者的 static 暫存。 */
++    static std::string bufs[8];
++    const char* en = getVirtueName(virtue);
++    if (virtue >= 8)
++        return en;                          // "???"(無對應 buffer)
++    std::string& buf = bufs[virtue - VIRT_HONESTY];
++    const char* zh = chtLookup(en, (int) strlen(en));
++    if (! zh || zh == en) {
++        buf = en;
++    } else {
++        buf = zh; buf += "("; buf += en; buf += ")";
++    }
++    return buf.c_str();
++}
++
+ const char *getBaseVirtueName(int virtueMask) {
+-    if (virtueMask == VIRT_TRUTH)           return "Truth";
+-    else if (virtueMask == VIRT_LOVE)       return "Love";
+-    else if (virtueMask == VIRT_COURAGE)    return "Courage";
+-    else if (virtueMask == (VIRT_TRUTH | VIRT_LOVE)) return "Truth and Love";
+-    else if (virtueMask == (VIRT_LOVE | VIRT_COURAGE)) return "Love and Courage";
+-    else if (virtueMask == (VIRT_COURAGE | VIRT_TRUTH)) return "Courage and Truth";
+-    else if (virtueMask == (VIRT_TRUTH | VIRT_LOVE | VIRT_COURAGE)) return "Truth, Love and Courage";
++    if (virtueMask == VIRT_TRUTH)           return CHT("Truth");
++    else if (virtueMask == VIRT_LOVE)       return CHT("Love");
++    else if (virtueMask == VIRT_COURAGE)    return CHT("Courage");
++    else if (virtueMask == (VIRT_TRUTH | VIRT_LOVE)) return CHT("Truth and Love");
++    else if (virtueMask == (VIRT_LOVE | VIRT_COURAGE)) return CHT("Love and Courage");
++    else if (virtueMask == (VIRT_COURAGE | VIRT_TRUTH)) return CHT("Courage and Truth");
++    else if (virtueMask == (VIRT_TRUTH | VIRT_LOVE | VIRT_COURAGE)) return CHT("Truth, Love and Courage");
+     else return "???";
+ }
+ 
+@@ -91,7 +123,7 @@ const char *getVirtueAdjective(Virtue virtue) {
+     };
+ 
+     if (virtue < 8)
+-        return virtueAdjectives[virtue - VIRT_HONESTY];
++        return CHT(virtueAdjectives[virtue - VIRT_HONESTY]);
+     else
+         return "???";
+ }
+@@ -104,7 +136,7 @@ const char *getStoneName(Virtue virtue) {
+     };
+ 
+     if (virtue < VIRT_MAX)
+-        return virtueNames[virtue - VIRT_HONESTY];
++        return CHT(virtueNames[virtue - VIRT_HONESTY]);
+     else
+         return "???";
+ }
+@@ -112,23 +144,23 @@ const char *getStoneName(Virtue virtue) {
+ const char *getItemName(Item item) {
+     switch (item) {
+     case ITEM_SKULL:
+-        return "Skull";
++        return CHT("Skull");
+     case ITEM_CANDLE:
+-        return "Candle";
++        return CHT("Candle");
+     case ITEM_BOOK:
+-        return "Book";
++        return CHT("Book");
+     case ITEM_BELL:
+-        return "Bell";
++        return CHT("Bell");
+     case ITEM_KEY_C:
+-        return "Courage";
++        return CHT("Courage");
+     case ITEM_KEY_L:
+-        return "Love";
++        return CHT("Love");
+     case ITEM_KEY_T:
+-        return "Truth";
++        return CHT("Truth");
+     case ITEM_HORN:
+-        return "Horn";
++        return CHT("Horn");
+     case ITEM_WHEEL:
+-        return "Wheel";
++        return CHT("Wheel");
+     default:
+         return "???";
+     }
+@@ -140,8 +172,7 @@ const char *getDirectionName(Direction dir) {
+     };
+ 
+     if (dir >= DIR_WEST && dir <= DIR_SOUTH)
+-        return directionNames[dir - DIR_WEST];
++        return CHT(directionNames[dir - DIR_WEST]);
+     else
+         return "???";
+ }
+-
+diff --git a/src/names.h b/src/names.h
+index eb9718a..68e5338 100644
+--- a/src/names.h
++++ b/src/names.h
+@@ -14,7 +14,8 @@
+  */
+ const char *getClassName(ClassType klass);
+ const char *getReagentName(Reagent reagent);
+-const char *getVirtueName(Virtue virtue);
++const char *getVirtueName(Virtue virtue);          /* 英文 canonical(輸入比對/縮寫首字母) */
++const char *getDisplayVirtueName(Virtue virtue);   /* 顯示用「中文(英文)」如 正義(Justice) */
+ const char *getBaseVirtueName(int virtueMask);
+ int getBaseVirtues(Virtue virtue);
+ const char *getVirtueAdjective(Virtue virtue);
+diff --git a/src/portal.cpp b/src/portal.cpp
+index 119aca3..8c22e70 100644
+--- a/src/portal.cpp
++++ b/src/portal.cpp
+@@ -3,6 +3,7 @@
+  */
+ 
+ #include "portal.h"
++#include "cht.h"      // U4 繁中化:型別字 chtLookup
+ 
+ #include "city.h"
+ #include "config.h"
+@@ -89,7 +90,12 @@ int usePortalAt(Location *location, const Coords& coords, PortalTriggerAction ac
+             case Map::CITY:
+                 {
+                     City *city = dynamic_cast<City*>(destination);
+-                    screenMessage("Enter %s!\n\n", city->cityTypeStr());
++                    /* U4 繁中化:型別字(castle/towne/village/ruins)是 %s 引數,
++                       螢幕翻譯只動格式字串,故先把型別字自行 chtLookup 成中文,
++                       否則會顯示「進入 castle!」。 */
++                    const char* tstr = city->cityTypeStr();
++                    const char* tzh = chtLookup(tstr, (int) strlen(tstr));
++                    screenMessage("Enter %s!\n\n", tzh ? tzh : tstr);
+                     screenMessageCenter(city->getName(), 2);
+                 }
+                 break;
+diff --git a/src/screen.cpp b/src/screen.cpp
+index 46d51bd..0c319e7 100644
+--- a/src/screen.cpp
++++ b/src/screen.cpp
+@@ -25,6 +25,7 @@
+ #include "tileset.h"
+ #include "xu4.h"
+ #include "gpu.h"
++#include "cht.h"      // U4 繁中化 hook
+ 
+ using std::vector;
+ 
+@@ -40,8 +41,11 @@ static const float colorBlack[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+ static const char* fontFiles[] = {
+     "cfont-comfortaa.txf",
+     "cfont-avatar.txf",
+-    "cfont-symbols.txf"
++    "cfont-symbols.txf",
++    "cfont-cjk.txf"         // CJK 後備字型(GUI 文字層中文化)
+ };
++#define TXF_COUNT  4
++#define TXF_CJK    3
+ 
+ /*
+  * Load textured font metrics.
+@@ -76,7 +80,7 @@ struct Screen {
+     ImageInfo* gemTilesInfo;
+     char* msgBuffer;
+     ScreenState state;
+-    TxfHeader* txf[3];
++    TxfHeader* txf[TXF_COUNT];
+     short needPrompt;
+     short colorFG;
+     uint16_t clearCount;
+@@ -125,7 +129,11 @@ struct Screen {
+         renderMapView = NULL;
+ #endif
+         txf[0] = NULL;
++        txf[TXF_CJK] = NULL;
++        // 基礎 3 套字型為必要;CJK 後備字型單獨非致命載入,缺檔不影響 GUI 文字。
+         loadFonts(fontFiles, 3, txf);
++        txf[TXF_CJK] = (TxfHeader*) xu4.config->loadFile(fontFiles[TXF_CJK]);
++        txf_setCJKFont(txf[TXF_CJK]);
+     }
+ 
+     ~Screen() {
+@@ -133,6 +141,7 @@ struct Screen {
+             free(txf[0]);
+             free(txf[1]);
+             free(txf[2]);
++            free(txf[TXF_CJK]);
+         }
+         delete dungeonView;
+         delete[] msgBuffer;
+@@ -176,6 +185,26 @@ static void initDungeonTileChars(std::map<string, int>& dungeonTileChars) {
+     dungeonTileChars["sleep_field"] = '^';
+ }
+ 
++/*
++ * U4 繁中化:視窗標題列標明目前主題(版本)。在 screenInit_data 呼叫 → 啟動與每次
++ * screenReInit(含 F2 切主題)都會更新,故開場就標明「圖形:EGA/VGA/FM Towns…」,
++ * 不必等按 F2。主題由模組名(gameTitle)判別,EGA/VGA 再以 imageMgr.usingVGA() 細分。
++ */
++static void screenSetThemeTitle() {
++    char mod[64];
++    xu4.config->gameTitle(mod);
++    const char* label;
++    if      (strstr(mod, "FMTowns")) label = "FM Towns";
++    else if (strstr(mod, "Amiga"))   label = "Amiga";
++    else if (strstr(mod, "MSX"))     label = "MSX2";
++    else if (strstr(mod, "X68"))     label = "X68000";
++    else if (strstr(mod, "SMS"))     label = "Sega MS";
++    else label = (xu4.imageMgr && xu4.imageMgr->usingVGA()) ? "VGA" : "EGA";
++    char title[160];
++    snprintf(title, sizeof(title), "Ultima IV 繁中化 — 圖形:%s", label);
++    screenSetWindowTitle(title);
++}
++
+ static void screenInit_data(Screen* scr, Settings& settings) {
+ #ifdef GPU_RENDER
+     scr->mapId = -1;
+@@ -189,6 +218,8 @@ static void screenInit_data(Screen* scr, Settings& settings) {
+     if (! scr->charsetInfo)
+         errorLoadImage(BKGD_CHARSET);
+ 
++    chtInit();      // 載入 en→zh lookup + CJK 字型
++
+ #ifdef GPU_RENDER
+     {
+     ImageInfo* tinfo;
+@@ -217,6 +248,11 @@ static void screenInit_data(Screen* scr, Settings& settings) {
+     if (! scr->state.tileanims)
+         errorFatal("Unable to find tile animations");
+ 
++    // U4 繁中化:imageMgr 已就緒,刷新 TextView 的 static charset(主題切換重建 imageMgr
++    // 後,殘留的 static charset 指標會懸空 → drawChar 崩潰)。choke point 統一刷新。
++    TextView::reloadCharset();
++    screenSetThemeTitle();      // 視窗標題標明目前主題(啟動即顯示,不必等 F2)
++
+     scr->gemTilesInfo = NULL;
+     screenLoadLayoutsFromConf(scr);
+ 
+@@ -265,7 +301,7 @@ void screenInit(int layerCount) {
+     xu4.screen = screen;
+ 
+     // Create a special purpose image that represents the whole screen.
+-    xu4.screenImage = Image::create(320, 200);
++    xu4.screenImage = Image::create(U4_SCREEN_W, U4_SCREEN_H);
+     xu4.screenImage->fill(Image::black);
+ 
+     screenInit_sys(xu4.settings, &screen->state, SYS_CLEAN);
+@@ -302,6 +338,41 @@ void screenReInit() {
+     //gs_emitMessage(SENDER_DISPLAY, &screen->state);
+ }
+ 
++/**
++ * U4 繁中化:F3 循環 game resolution(scale 2→3→4),讓 tile 物理放大。
++ * 視窗 = U4_SCREEN_W/H × scale;scale 越大,單一 tile 在螢幕上的物理像素越多。
++ * 僅在 StagePlay 生效:遊戲每幀經 imageMgr 重抓圖,screenReInit 後可乾淨重繪;
++ * intro 期間 IntroController 快取大量 ImageInfo 指標(treeImg/titles…),
++ * screenReInit 會 new ImageMgr 使其懸空 → 故 intro 改用 Video 設定選單調整。
++ */
++bool screenCycleScale() {
++    if (xu4.stage != StagePlay)
++        return false;
++    int s = xu4.settings->scale + 1;
++    if (s > 4) s = 1;               // 循環 1→2→3→4(含 1 讓畫面可變小)
++    xu4.settings->scale = s;
++    screenReInit();
++    gameUpdateScreen();
++    return true;
++}
++
++/*
++ * U4 繁中化:視窗大小改變時呼叫(Allegro DISPLAY_RESIZE / GLFW framebuffer callback)。
++ * 維持遊戲原生渲染尺寸(aspectW/H 不變 → scaler 整數倍、GUI 版面、滑鼠映射全部照舊),
++ * 只更新顯示尺寸與置中偏移(letterbox);放大時遊戲置中、四周留邊,縮小時置中裁切。
++ */
++void screenResize(int w, int h) {
++    Screen* screen = XU4_SCREEN;
++    if (! screen || w < 1 || h < 1)
++        return;
++    ScreenState* ss = &screen->state;
++    ss->displayW = w;
++    ss->displayH = h;
++    ss->aspectX = (w - ss->aspectW) / 2;
++    ss->aspectY = (h - ss->aspectH) / 2;
++    screen->clearCount = 2;     // 清掉新露出的邊框,避免殘影
++}
++
+ // Private to screenInit_sys().
+ int screenInitState(ScreenState* state, const Settings* settings, int dw, int dh)
+ {
+@@ -350,15 +421,30 @@ bool screenLayerUsed(int layer) {
+     return XU4_SCREEN->layers[layer].func ? true : false;
+ }
+ 
++static void screenDrawCJKAt(const char* s, int cellX, int cellY);   // U4 繁中化前置宣告
++
+ void screenTextAt(int x, int y, const char *fmt, ...) {
+     char* buffer = XU4_SCREEN->msgBuffer;
+     int i, buflen;
+ 
++    /* U4 繁中化:先查 format(如 "Wind %5s"→"風 %5s"、"Dir: %5s"→"方向:%5s"),
++     * %5s 等引數同序代入;中文 format 代入後結果即含 CJK。 */
++    const char* zhFmt = chtLookup(fmt, (int) strlen(fmt));
++    if (zhFmt) fmt = zhFmt;
++
+     va_list args;
+     va_start(args, fmt);
+     buflen = vsnprintf(buffer, MsgBufferSize, fmt, args);
+     va_end(args);
+ 
++    /* HUD:整串查表命中,或結果已含 CJK(format 已譯)→ 以 CJK 渲染在 (x,y) */
++    const char* zh = chtLookup(buffer, buflen);
++    if (! zh) {
++        for (const unsigned char* p = (const unsigned char*) buffer; *p; ++p)
++            if (*p >= 0x80) { zh = buffer; break; }
++    }
++    if (zh) { screenDrawCJKAt(zh, x, y); return; }
++
+     for (i = 0; i < buflen; i++)
+         screenShowChar(buffer[i], x + i, y);
+ }
+@@ -403,6 +489,13 @@ void screenMessage(const char *fmt, ...) {
+     if (! c)
+         return; // Some cases (like the intro) don't have the context initiated.
+ 
++    /* U4 繁中化(#3 format-aware):先查 format 字串本身,命中則以中文 format
++     * 餵 vsnprintf —— 中文 zh format 與 en 的 %s/%d/%c 同序(已校驗),引數照常代入。
++     * 結果含 CJK,screenMessageN 會偵測 CJK bytes 改走 CJK 渲染。 */
++    const char* zhFmt = chtLookup(fmt, (int) strlen(fmt));
++    if (zhFmt)
++        fmt = zhFmt;
++
+     va_list args;
+     va_start(args, fmt);
+     buflen = vsnprintf(buffer, MsgBufferSize, fmt, args);
+@@ -417,36 +510,157 @@ void screenMessage(const char *fmt, ...) {
+  * Center first line of text in message area.
+  */
+ void screenMessageCenter(const char* text, int newlines) {
+-    const int half = TEXT_AREA_W / 2;
++    /* U4 繁中化:地名等經此置中顯示。原版以 byte 長度置中且不查表 → CJK 地名
++     * (如「共感修道院」)既未翻譯又會偏移。改為:先 chtLookup,再依「顯示格數」
++     * (CJK 全形與 ASCII 皆算 1 格,對齊 screenMessageCJK 的進格)置中。 */
++    const char* zh = chtLookup(text, (int) strlen(text));
++    if (zh)
++        text = zh;
++
++    /* 第一行顯示格數 = 第一行 codepoint 數(到 \n 為止) */
++    int width = 0;
++    for (const unsigned char* p = (const unsigned char*) text; *p && *p != '\n'; ) {
++        unsigned char b = *p;
++        int n = (b < 0x80) ? 1 : ((b >> 5) == 0x6) ? 2 :
++                ((b >> 4) == 0xE) ? 3 : ((b >> 3) == 0x1E) ? 4 : 1;
++        p += n;
++        ++width;
++    }
++    int indent = (TEXT_AREA_W - width) / 2;
++    if (indent < 0)
++        indent = 0;
++
+     char* buffer = XU4_SCREEN->msgBuffer;
+-    char* start = buffer + half;
+-    char* cp = start;
+-    char* endOfLine = NULL;
+-    int ch, lineLen;
+-
+-    memset(buffer, ' ', half);
+-    while ((ch = *text++)) {
+-        if (ch == '\n' && ! endOfLine)
+-            endOfLine = cp;
+-        *cp++ = ch;
++    char* cp = buffer;
++    char* lim = buffer + MsgBufferSize;     // 界限:勿寫爆 msgBuffer
++    for (int i = 0; i < indent && cp < lim; ++i)
++        *cp++ = ' ';
++    for (const char* s = text; *s && cp < lim; )
++        *cp++ = *s++;
++    while (newlines-- > 0 && cp < lim)
++        *cp++ = '\n';
++
++    screenMessageN(buffer, (int) (cp - buffer));
++}
++
++/* U4 繁中化:buffer 是否含 UTF-8 多位元組(CJK)。 */
++static bool chtHasCJK(const char* s, int len) {
++    for (int i = 0; i < len; ++i)
++        if ((unsigned char) s[i] >= 0x80) return true;
++    return false;
++}
++
++/* U4 繁中化:把一個 CJK glyph(16×16 灰階 alpha)blit 到絕對像素 (px,py)。 */
++static void cjkBlitPx(uint32_t cp, int px, int py) {
++    const uint8_t* g = chtGlyph(cp);
++    int dim = chtGlyphDim();
++    Image* screen = xu4.screenImage;
++    if (! g) {
++        screen->fillRect(px, py, dim, dim, 60, 60, 60);   // 缺字:灰框
++        return;
+     }
++    for (int y = 0; y < dim; ++y)
++        for (int x = 0; x < dim; ++x) {
++            int a = g[y * dim + x];   // 灰階 alpha:白字混黑底(二值 atlas 亦相容)
++            screen->putPixel(px + x, py + y, a, a, a, 255);
++        }
++}
+ 
+-    if (! endOfLine)
+-        endOfLine = cp;
+-    lineLen = endOfLine - start;
+-    if (lineLen > TEXT_AREA_W)
+-        lineLen = TEXT_AREA_W;
+-    start -= half - (lineLen+1) / 2;    // Indent
++/* 文字區 cell(col,line)→ 絕對像素 blit。 */
++static void cjkBlit(uint32_t cp, int col, int line) {
++    cjkBlitPx(cp, (TEXT_AREA_X + col) * CHAR_WIDTH, (TEXT_AREA_Y + line) * CHAR_HEIGHT);
++}
+ 
+-    while (newlines) {
+-        --newlines;
+-        *cp++ = '\n';
++/* U4 繁中化:把已翻譯 UTF-8 字串渲染到絕對 cell(cellX,cellY)起(單行,夾雜 ASCII)。
++ * 供 screenTextAt(HUD)使用。 */
++static void screenDrawCJKAt(const char* s, int cellX, int cellY) {
++    const unsigned char* p = (const unsigned char*) s;
++    int col = 0;
++    while (*p) {
++        unsigned char b = *p;
++        uint32_t cp; int n;
++        if (b < 0x80)            { cp = b;        n = 1; }
++        else if ((b >> 5) == 0x6){ cp = b & 0x1F; n = 2; }
++        else if ((b >> 4) == 0xE){ cp = b & 0x0F; n = 3; }
++        else if ((b >> 3) == 0x1E){cp = b & 0x07; n = 4; }
++        else { ++p; continue; }
++        for (int k = 1; k < n; ++k) {
++            if ((p[k] & 0xC0) != 0x80) { n = k; break; }
++            cp = (cp << 6) | (p[k] & 0x3F);
++        }
++        p += n;
++        if (cp < 0x80) { screenShowChar((int) cp, cellX + col, cellY); col += 1; }
++        else { cjkBlitPx(cp, (cellX + col) * CHAR_WIDTH, cellY * CHAR_HEIGHT); col += 1; }
+     }
++}
+ 
+-    screenMessageN(start, cp - start);
++/* U4 繁中化:把 UTF-8 中文字串畫在絕對像素 (px,py)(每字寬 CHAR_WIDTH)。
++ * 供 intro 吉普賽卡牌疊德目名等需精確落點處使用(公開)。 */
++void screenDrawCJKPixel(const char* s, int px, int py) {
++    const unsigned char* p = (const unsigned char*) s;
++    int adv = 0;
++    while (*p) {
++        unsigned char b = *p;
++        uint32_t cp; int n;
++        if (b < 0x80)             { cp = b;        n = 1; }
++        else if ((b >> 5) == 0x6) { cp = b & 0x1F; n = 2; }
++        else if ((b >> 4) == 0xE) { cp = b & 0x0F; n = 3; }
++        else if ((b >> 3) == 0x1E){ cp = b & 0x07; n = 4; }
++        else { ++p; continue; }
++        for (int k = 1; k < n; ++k) {
++            if ((p[k] & 0xC0) != 0x80) { n = k; break; }
++            cp = (cp << 6) | (p[k] & 0x3F);
++        }
++        p += n;
++        if (cp >= 0x80) { cjkBlitPx(cp, px + adv, py); adv += CHAR_WIDTH; }
++    }
++}
++
++/* U4 繁中化:把已翻譯的 UTF-8 中文字串渲染到文字區(CJK-aware,行距 2)。 */
++static void screenMessageCJK(const char* s) {
++    const int colCount = TEXT_AREA_W;
++    const unsigned char* p = (const unsigned char*) s;
++    if (c->line >= TEXT_AREA_H) { c->line = TEXT_AREA_H - 1; screenScrollMessageArea(); }
++    while (*p) {
++        unsigned char b = *p;
++        if (b == '\n') {
++            c->col = 0; c->line += 1;
++            while (c->line >= TEXT_AREA_H) { c->line--; screenScrollMessageArea(); }
++            ++p; continue;
++        }
++        uint32_t cp; int n;
++        if (b < 0x80)            { cp = b;        n = 1; }
++        else if ((b >> 5) == 0x6){ cp = b & 0x1F; n = 2; }
++        else if ((b >> 4) == 0xE){ cp = b & 0x0F; n = 3; }
++        else if ((b >> 3) == 0x1E){cp = b & 0x07; n = 4; }
++        else { ++p; continue; }
++        for (int k = 1; k < n; ++k) {
++            if ((p[k] & 0xC0) != 0x80) { n = k; break; }
++            cp = (cp << 6) | (p[k] & 0x3F);
++        }
++        p += n;
++        if (cp < 0x80) {                          // 夾雜 ASCII
++            if (c->col >= colCount) { c->col = 0; c->line += 1;
++                while (c->line >= TEXT_AREA_H) { c->line--; screenScrollMessageArea(); } }
++            screenShowChar((int) cp, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
++            c->col++;
++        } else {                                  // CJK 全形,佔 2 欄
++            if (c->col + 1 > colCount) { c->col = 0; c->line += 1;
++                while (c->line >= TEXT_AREA_H) { c->line--; screenScrollMessageArea(); } }
++            cjkBlit(cp, c->col, c->line);
++            c->col += 1;
++        }
++    }
++    screenSetCursorPos(TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+ }
+ 
+ void screenMessageN(const char* buffer, int buflen) {
++    /* U4 繁中化:load-time 查表命中,或 buffer 已含 CJK(來自 #3 format-aware
++     * 在 screenMessage 端翻好的 format 字串)→ 走 CJK 渲染 */
++    const char* zh = chtLookup(buffer, buflen);
++    if (zh) { screenMessageCJK(zh); return; }
++    if (chtHasCJK(buffer, buflen)) { screenMessageCJK(buffer); return; }
++
+     bool colorize = xu4.settings->enhancements &&
+                     xu4.settings->enhancementsOptions.textColorization;
+     const int colCount = TEXT_AREA_W;
+@@ -850,11 +1064,76 @@ static void screenUploadCursor(Screen* sp, uint32_t stex) {
+                     &cimg);
+ }
+ 
++/* U4 繁中化 self-test(env U4CHT_SELFTEST):headless 驗證
++ * 資產載入→真實 chtLookup→CJK glyph blit→上傳 全鏈路。每幀覆寫到文字區。 */
++static void chtSelfTest() {
++    if (! getenv("U4CHT_SELFTEST")) return;
++    static const char* keys[] = {
++        "a charming bard.",
++        "Magincia was\ndestroyed by its\npride.",
++    };
++    int line = 0;
++    for (int ki = 0; ki < 2; ++ki) {
++        const char* en = keys[ki];
++        const char* zh = chtLookup(en, (int) strlen(en));
++        if (! zh) { line += 1; continue; }
++        int col = 0;
++        const unsigned char* p = (const unsigned char*) zh;
++        while (*p) {
++            unsigned char b = *p;
++            if (b == '\n') { col = 0; line += 1; ++p; continue; }
++            uint32_t cp; int n;
++            if (b < 0x80)             { cp = b;        n = 1; }
++            else if ((b >> 5) == 0x6) { cp = b & 0x1F; n = 2; }
++            else if ((b >> 4) == 0xE) { cp = b & 0x0F; n = 3; }
++            else if ((b >> 3) == 0x1E){ cp = b & 0x07; n = 4; }
++            else { ++p; continue; }
++            for (int k = 1; k < n; ++k) { if ((p[k] & 0xC0) != 0x80) { n = k; break; }
++                cp = (cp << 6) | (p[k] & 0x3F); }
++            p += n;
++            if (cp < 0x80) { screenShowChar((int) cp, TEXT_AREA_X + col, TEXT_AREA_Y + line); col++; }
++            else { if (col + 1 > TEXT_AREA_W) { col = 0; line += 1; }
++                cjkBlit(cp, col, line); col += 1; }
++        }
++        line += 1;
++    }
++    XU4_SCREEN->uploadScreen = 1;
++}
++
++/*
++ * U4 繁中化 scale-to-fill:算出「保持 aspectW:aspectH 比例、放得進整個視窗、置中」的
++ * 最大矩形。視窗放大時遊戲跟著等比放大填滿(letterbox 兩側留邊);視窗等於原生渲染尺寸
++ * (未 resize)時退化為原本的 aspectX/Y + aspectW/H,行為與 letterbox 完全相同。
++ * 注意:aspectW/H 是整數渲染倍率,被版面/游標/震動到處使用,不能改 → 只在「最終 present
++ * 的 viewport」與「滑鼠座標反算」這兩處用本 fill rect 拉伸,framebuffer 渲染尺寸不變。
++ */
++static void screenFillRect(const ScreenState* ss, int* fx, int* fy,
++                           int* fw, int* fh) {
++    int dw = ss->displayW, dh = ss->displayH;
++    int aw = ss->aspectW,  ah = ss->aspectH;
++    if (aw < 1 || ah < 1 || dw < 1 || dh < 1) {
++        *fx = ss->aspectX; *fy = ss->aspectY; *fw = aw; *fh = ah;
++        return;
++    }
++    if ((long) dw * ah <= (long) dh * aw) {     // 視窗較矮 → 以寬度填滿
++        *fw = dw;
++        *fh = (int) ((long) dw * ah / aw);
++    } else {                                    // 視窗較高 → 以高度填滿
++        *fh = dh;
++        *fw = (int) ((long) dh * aw / ah);
++    }
++    *fx = (dw - *fw) / 2;
++    *fy = (dh - *fh) / 2;
++}
++
+ void screenRender() {
++    chtSelfTest();
+     Screen* sp = XU4_SCREEN;
+     void* gpu = xu4.gpu;
+     ScreenState* ss = &sp->state;
+-    int offsetY = ss->aspectY;
++    int fillX, fillY, fillW, fillH;
++    screenFillRect(ss, &fillX, &fillY, &fillW, &fillH);
++    int offsetY = fillY;
+ 
+     if (sp->uploadScreen) {
+         sp->uploadScreen = 0;
+@@ -867,7 +1146,7 @@ void screenRender() {
+     }
+ 
+     if (ss->vertOffset) {
+-        offsetY -= ss->vertOffset;
++        offsetY -= ss->vertOffset * fillH / ss->aspectH;    // 震動量隨拉伸等比縮放
+         if (! sp->clearCount)
+             sp->clearCount = 1;     // Clear the top rows of pixels.
+     }
+@@ -875,7 +1154,7 @@ void screenRender() {
+         sp->clearCount -= 1;
+         gpu_clear(gpu, colorBlack);
+     }
+-    gpu_viewport(ss->aspectX, offsetY, ss->aspectW, ss->aspectH);
++    gpu_viewport(fillX, offsetY, fillW, fillH);
+     gpu_drawTextureScaled(gpu, gpu_screenTexture(gpu));
+ 
+ #ifdef GPU_RENDER
+@@ -903,7 +1182,7 @@ void screenRender() {
+         if (view->scissor)
+             gpu_setScissor(NULL);
+ 
+-        gpu_viewport(ss->aspectX, offsetY, ss->aspectW, ss->aspectH);
++        gpu_viewport(fillX, offsetY, fillW, fillH);
+     }
+ #endif
+ 
+@@ -1488,11 +1767,25 @@ static int pointInTriangle(int x, int y, int tx1, int ty1, int tx2, int ty2, int
+ /*
+  * Transform window x,y to MouseArea coordinate system.
+  */
++/*
++ * U4 繁中化:把視窗(滑鼠)座標反算回 render framebuffer 座標。scale-to-fill 會把固定
++ * 解析度 framebuffer 拉伸到 fill rect 填滿視窗;滑鼠拿到視窗座標,須先依 fill rect 反算
++ * 回 framebuffer 空間,後續 /scale、版面換算才正確。未 resize 時退化為 (winX - aspectX)。
++ * 所有滑鼠命中(MouseArea / 選單 mouseTextPos)都應先經本函式,否則放大視窗後點擊錯位。
++ */
++void screenWindowToRender(int* x, int* y) {
++    const ScreenState* ss = &XU4_SCREEN->state;
++    int fx, fy, fw, fh;
++    screenFillRect(ss, &fx, &fy, &fw, &fh);
++    *x = (fw > 0) ? (int)((long)(*x - fx) * ss->aspectW / fw) : (*x - fx);
++    *y = (fh > 0) ? (int)((long)(*y - fy) * ss->aspectH / fh) : (*y - fy);
++}
++
+ void screenPointToMouseArea(int* x, int* y) {
+-    const Screen* sp = XU4_SCREEN;
+-    unsigned int scale = sp->state.aspectH / U4_SCREEN_H;
+-    *x = (*x - sp->state.aspectX) / scale;
+-    *y = (*y - sp->state.aspectY) / scale;
++    unsigned int scale = XU4_SCREEN->state.aspectH / U4_SCREEN_H;
++    screenWindowToRender(x, y);          // 視窗 → render framebuffer(經 fill rect)
++    *x /= (int) scale;
++    *y /= (int) scale;
+ }
+ 
+ /**
+diff --git a/src/screen.h b/src/screen.h
+index 396af65..46e6eaa 100644
+--- a/src/screen.h
++++ b/src/screen.h
+@@ -109,6 +109,9 @@ void screenInit(int layerCount);
+ void screenRefreshTimerInit(void);
+ void screenDelete(void);
+ void screenReInit(void);
++bool screenCycleScale(void);    /* U4 繁中化:F3 循環 game resolution(scale),tile 物理放大 */
++void screenResize(int w, int h);/* U4 繁中化:視窗可調大小 — 維持原生渲染、置中 letterbox */
++void screenDrawCJKPixel(const char* s, int px, int py);  /* U4 繁中化:像素座標畫 CJK 字串 */
+ void screenSetLayer(int layer, void (*renderFunc)(ScreenState*, void*),
+                     void* data);
+ bool screenLayerUsed(int layer);
+@@ -160,6 +163,8 @@ void screenDetectDungeonTraps();
+ void screenSetMouseCursor(MouseCursor cursor);
+ void screenShowMouseCursor(bool visible);
+ void screenPointToMouseArea(int* x, int* y);
++void screenWindowToRender(int* x, int* y);      // U4 繁中化:視窗座標→render(scale-to-fill 反算)
++void screenSetWindowTitle(const char* title);   // U4 繁中化:F2 切主題更新標題列
+ int  pointInMouseArea(int x, int y, const MouseArea *area);
+ 
+ const ScreenState* screenState();
+diff --git a/src/screen_allegro.cpp b/src/screen_allegro.cpp
+index 2901aa8..148f3e6 100644
+--- a/src/screen_allegro.cpp
++++ b/src/screen_allegro.cpp
+@@ -107,11 +107,11 @@ void screenInit_sys(const Settings* settings, ScreenState* state, int reset) {
+ #ifdef _WIN32
+     // ALLEGRO_OPENGL_3_0 causes al_create_display() to fail on Windows 7 and
+     // with Wine.  We check that version 3.3 calls are available below.
+-    int dflags = ALLEGRO_OPENGL;
++    int dflags = ALLEGRO_OPENGL | ALLEGRO_RESIZABLE;
+ #else
+     // NOTE: _FORWARD_COMPATIBLE requires al_set_current_opengl_context()
+     int dflags = ALLEGRO_OPENGL | ALLEGRO_OPENGL_3_0 |
+-                 ALLEGRO_OPENGL_FORWARD_COMPATIBLE;
++                 ALLEGRO_OPENGL_FORWARD_COMPATIBLE | ALLEGRO_RESIZABLE;
+ #endif
+     int scale = settings->scale;
+     int dw = U4_SCREEN_W * scale;
+@@ -147,6 +147,22 @@ void screenInit_sys(const Settings* settings, ScreenState* state, int reset) {
+         al_register_event_source(sa->queue, al_get_mouse_event_source());
+     }
+ 
++    // U4 繁中化:windowed 模式依桌面大小自動降 scale,避免視窗比螢幕大。否則(尤其
++    // 配 ALLEGRO_RESIZABLE)WM 會把過大的視窗縮小 → al_get_display_height < dh →
++    // aspectY 變負 → 開頭畫面偏移。預留邊距給標題列/工作列。
++    if (! settings->fullscreen) {
++        ALLEGRO_MONITOR_INFO mi;
++        if (al_get_monitor_info(0, &mi)) {
++            int availW = mi.x2 - mi.x1;
++            int availH = (mi.y2 - mi.y1) - 96;
++            while (scale > 1 &&
++                   (U4_SCREEN_W * scale > availW || U4_SCREEN_H * scale > availH))
++                --scale;
++            dw = U4_SCREEN_W * scale;
++            dh = U4_SCREEN_H * scale;
++        }
++    }
++
+     if (settings->fullscreen)
+         dflags |= ALLEGRO_FULLSCREEN_WINDOW;
+     al_set_new_display_flags(dflags);
+@@ -343,3 +359,10 @@ void screenShowMouseCursor(bool visible) {
+     else
+         al_hide_mouse_cursor(SA->disp);
+ }
++
++// U4 繁中化:F2 切換主題後更新視窗標題列顯示目前主題。
++void screenSetWindowTitle(const char* title) {
++    ScreenAllegro* sa = (ScreenAllegro*) xu4.screenSys;
++    if (sa && sa->disp)
++        al_set_window_title(sa->disp, title);
++}
+diff --git a/src/screen_glfw.cpp b/src/screen_glfw.cpp
+index a8d7a6a..acd74d2 100644
+--- a/src/screen_glfw.cpp
++++ b/src/screen_glfw.cpp
+@@ -266,6 +266,13 @@ static void mouseMotionHandler(GLFWwindow* win, double x, double y)
+     dispatchEvent(&ie);
+ }
+ 
++// U4 繁中化:視窗可調大小 — framebuffer 尺寸改變時更新顯示尺寸並置中遊戲畫面。
++static void framebufferSizeHandler(GLFWwindow* win, int width, int height)
++{
++    (void) win;
++    screenResize(width, height);
++}
++
+ static void mouseButtonHandler(GLFWwindow* win, int button, int action,
+                                int mods)
+ {
+@@ -352,7 +359,7 @@ void screenInit_sys(const Settings* settings, ScreenState* state, int reset)
+             errorFatal("Unable to initialize GLFW");
+         }
+ 
+-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
++        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);   // U4 繁中化:視窗可調大小
+ #if defined(USE_GLES)
+         const int glVersion = 0x301;
+ #else
+@@ -388,6 +395,7 @@ void screenInit_sys(const Settings* settings, ScreenState* state, int reset)
+         glfwSetCursorPosCallback(ss->view, mouseMotionHandler);
+         glfwSetMouseButtonCallback(ss->view, mouseButtonHandler);
+         glfwSetScrollCallback(ss->view, scrollHandler);
++        glfwSetFramebufferSizeCallback(ss->view, framebufferSizeHandler);
+ 
+ #if defined(__linux__)
+         _setWindowIcon(ss->view, "/usr/share/icons/hicolor/48x48/apps/xu4.png");
+@@ -611,3 +619,10 @@ void EventHandler::handleInputEvents(Controller* waitCon,
+ int EventHandler::setKeyRepeat(int delay, int interval) {
+     return 0;
+ }
++
++// U4 繁中化:F2 切換主題後更新視窗標題列顯示目前主題。
++void screenSetWindowTitle(const char* title) {
++    ScreenGLView* ss = SGL;
++    if (ss && ss->view)
++        glfwSetWindowTitle(ss->view, title);
++}
+diff --git a/src/screen_glv.cpp b/src/screen_glv.cpp
+index f0b4c18..4bc20f0 100644
+--- a/src/screen_glv.cpp
++++ b/src/screen_glv.cpp
+@@ -432,3 +432,10 @@ int EventHandler::setKeyRepeat(int delay, int interval) {
+     //return SDL_EnableKeyRepeat(delay, interval);
+     return 0;
+ }
++
++// U4 繁中化:F2 切換主題後更新視窗標題列顯示目前主題。
++void screenSetWindowTitle(const char* title) {
++    ScreenGLView* sa = SA;
++    if (sa && sa->view)
++        glv_setTitle(sa->view, title);
++}
+diff --git a/src/script_boron.cpp b/src/script_boron.cpp
+index 20691ed..2dd2518 100644
+--- a/src/script_boron.cpp
++++ b/src/script_boron.cpp
+@@ -281,13 +281,52 @@ CFUNC(cf_viewStats)
+ 
+     Print to the screen message area.
+ */
++/* U4 繁中化:把一個 Unicode codepoint 以 UTF-8 附加到 out。 */
++static void chtAppendUtf8(std::string& out, uint32_t cp) {
++    if (cp < 0x80) {
++        out += (char) cp;
++    } else if (cp < 0x800) {
++        out += (char) (0xC0 | (cp >> 6));
++        out += (char) (0x80 | (cp & 0x3F));
++    } else if (cp < 0x10000) {
++        out += (char) (0xE0 | (cp >> 12));
++        out += (char) (0x80 | ((cp >> 6) & 0x3F));
++        out += (char) (0x80 | (cp & 0x3F));
++    } else {
++        out += (char) (0xF0 | (cp >> 18));
++        out += (char) (0x80 | ((cp >> 12) & 0x3F));
++        out += (char) (0x80 | ((cp >> 6) & 0x3F));
++        out += (char) (0x80 | (cp & 0x3F));
++    }
++}
++
+ CFUNC(cf_screenMessage)
+ {
+     if (ur_is(a1, UT_STRING)) {
++        /* U4 繁中化:Boron 把含 CJK(codepoint 256–65535)的字串字面存成
++         * UR_ENC_UCS2(每字 16-bit);construct(vendor `=>` / input-shop)沿用
++         * 該編碼。若直接把 buffer 的 ptr.c 當 UTF-8 byte 輸出,UCS2 會被誤讀
++         * (ASCII 高位 0x00 → NUL 截斷成空白、CJK 低位 byte → 亂碼)—— 即商店
++         * 對白「怪怪的字 + 一堆空白」之根因。(vendor 是唯一把 module 內 CJK
++         * 經此路徑輸出者;其餘文字走 C 端 chtLookup。)
++         *
++         * 不用 ur_toText 轉:它寫進 UR_ENC_UTF8 buffer 時按「字數」而非 byte 數
++         * 配置容量,CJK(3 byte/字)會 heap 溢位。改自行逐 codepoint 編 UTF-8。 */
+         USeriesIter si;
+         ur_seriesSlice(ut, &si, a1);
+-        ur_strTermNull((UBuffer*) si.buf);
+-        screenMessage(si.buf->ptr.c + si.it);
++        std::string utf;
++        if (si.buf->form == UR_ENC_UCS2) {
++            const uint16_t* s = si.buf->ptr.u16;
++            for (UIndex i = si.it; i < si.end; ++i)
++                chtAppendUtf8(utf, s[i]);
++        } else if (si.buf->form == UR_ENC_UTF8) {
++            utf.assign(si.buf->ptr.c + si.it, si.end - si.it);   // 已是 UTF-8 byte
++        } else {    // UR_ENC_LATIN1:每 byte 即 codepoint(0–255)
++            const uint8_t* s = si.buf->ptr.b;
++            for (UIndex i = si.it; i < si.end; ++i)
++                chtAppendUtf8(utf, s[i]);
++        }
++        screenMessage("%s", utf.c_str());   // "%s":避免文字內 % 被當 printf 格式
+     }
+     else if (ur_is(a1, UT_CHAR)) {
+         screenMessage("%c", (int) ur_char(a1));
+diff --git a/src/shrine.cpp b/src/shrine.cpp
+index d963c8b..6fa61bd 100644
+--- a/src/shrine.cpp
++++ b/src/shrine.cpp
+@@ -3,7 +3,9 @@
+  */
+ 
+ #include <string>
++#include <cstring>
+ 
++#include "cht.h"        // U4 繁中化:聖壇箴言查表(%s 引數需自行查)
+ #include "shrine.h"
+ 
+ #include "game.h"
+@@ -30,8 +32,10 @@ bool shrineCanEnter(const Portal *p) {
+ 
+ const char* Shrine::getName() const {
+     std::string& str = c->shrineState.shrineName;
+-    str = "Shrine of ";
+-    str += getVirtueName(virtue);
++    /* U4 繁中化:雙語「正義(Justice)聖壇」—— 玩家冥想時須輸入英文美德名,故附英文。
++     * (輸入比對見 enter():getVirtueName 回英文 canonical) */
++    str = getDisplayVirtueName(virtue);
++    str += "聖壇";
+     return str.c_str();
+ }
+ 
+@@ -173,7 +177,7 @@ void Shrine::askMantra() {
+         bool elevated = ss->completedCycles == 3 && c->party->attemptElevation(virtue);
+         if (elevated) {
+             screenMessage("\nThou hast achieved partial Avatarhood in the Virtue of %s\n",
+-                          getVirtueName(virtue));
++                          getDisplayVirtueName(virtue));
+             gameSpellEffect(-1, -1, SOUND_ELEVATE);
+         } else
+             screenMessage("\nThy thoughts are pure. "
+@@ -194,7 +198,13 @@ void Shrine::showVision(bool elevated) {
+         screenDrawImageInMapArea(visionImageNames[virtue & 7]);
+     } else {
+         ShrineState* ss = &c->shrineState;
+-        screenMessage("\n%s", ss->advice[virtue * 3 + ss->completedCycles - 1].c_str());
++        {
++            /* U4 繁中化:箴言是 %s 引數(且前綴 \n),screenMessageN 查表會因 \n 不命中,
++             * 故在此自行 chtLookup(譯文在 stringtable shrine_advice → u4_cht.tab)。 */
++            const std::string& adv = ss->advice[virtue * 3 + ss->completedCycles - 1];
++            const char* zh = chtLookup(adv.c_str(), (int) adv.size());
++            screenMessage("\n%s", zh ? zh : adv.c_str());
++        }
+     }
+ }
+ 
+diff --git a/src/spell.cpp b/src/spell.cpp
+index 977cedf..0bc6f6c 100644
+--- a/src/spell.cpp
++++ b/src/spell.cpp
+@@ -165,6 +165,16 @@ void Ingredients::multiply(int batches) {
+ const char *spellGetName(unsigned int spell) {
+     ASSERT(spell < N_SPELLS, "invalid spell: %d", spell);
+ 
++    /* U4 繁中化:官方法術名(精訊手冊《魔法之書》)。用本地表避開全域查表
++     * 對 Kill/Open/Light 等常用字的碰撞。順序對齊 spells[] A–Z。 */
++    static const char* const spellNameZh[] = {
++        "甦醒術","飛遁術","治療術","解場術","力場術","火球術","月門傳送術","療傷術",
++        "冰球術","亂魂術","妖殺術","神光術","魔擊術","終止術","開啟術","護身術",
++        "縮時術","起死回生術","催眠術","裂地術","趕鬼術","靈視術","召風術","脫離術",
++        "飛昇術","沈降術"
++    };
++    if (spell < sizeof(spellNameZh)/sizeof(spellNameZh[0]))
++        return spellNameZh[spell];
+     return spells[spell].name;
+ }
+ 
+diff --git a/src/stats.cpp b/src/stats.cpp
+index d2c466b..9235af3 100644
+--- a/src/stats.cpp
++++ b/src/stats.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include "stats.h"
+ 
++#include "cht.h"      // U4 繁中化:stats 標題查表
+ #include "config.h"
+ #include "party.h"
+ #include "spell.h"
+@@ -246,7 +247,17 @@ void StatsArea::flashPlayers(int playerMask) {
+  * Sets the title of the stats area.
+  */
+ void StatsArea::setTitle(const char* s) {
+-    int titleStart = (STATS_AREA_WIDTH / 2) - ((strlen(s) + 2) / 2);
++    /* U4 繁中化:標題查表(武器/防具/裝備…);置中寬度依顯示格數(CJK 1 格)。 */
++    const char* zh = chtLookup(s, (int) strlen(s));
++    if (zh) s = zh;
++    int cells = 0;
++    for (const unsigned char* q = (const unsigned char*) s; *q; ++cells) {
++        if (*q < 0x80) q += 1;
++        else if (*q < 0xE0) q += 2;
++        else if (*q < 0xF0) q += 3;
++        else q += 4;
++    }
++    int titleStart = (STATS_AREA_WIDTH / 2) - ((cells + 2) / 2);
+     title.textAtFmt(titleStart, 0, "%c%s%c", 16, s, 17);
+ }
+ 
+diff --git a/src/support/txf_draw.c b/src/support/txf_draw.c
+index b449d10..078df24 100644
+--- a/src/support/txf_draw.c
++++ b/src/support/txf_draw.c
+@@ -3,6 +3,49 @@
+ #include <math.h>
+ #include "txf_draw.h"
+ 
++/* CJK 後備字型(稀疏碼位)。見 txf_setCJKFont。 */
++static const TxfHeader* g_cjkFont = NULL;
++
++void txf_setCJKFont(const TxfHeader* tf)
++{
++    g_cjkFont = tf;
++}
++
++/* 解一個 UTF-8 字:回傳消耗的 byte 數,*cp 為碼位。
++   非法序列退化為單 byte。 */
++static int txf_utf8(const uint8_t* it, const uint8_t* end, int* cp)
++{
++    uint8_t c = *it;
++    int n, v, i;
++    if (c < 0x80)             { *cp = c; return 1; }
++    if ((c & 0xE0) == 0xC0)   { n = 2; v = c & 0x1F; }
++    else if ((c & 0xF0) == 0xE0) { n = 3; v = c & 0x0F; }
++    else if ((c & 0xF8) == 0xF0) { n = 4; v = c & 0x07; }
++    else                      { *cp = c; return 1; }
++    if (it + n > end)         { *cp = c; return 1; }
++    for (i = 1; i < n; ++i) {
++        if ((it[i] & 0xC0) != 0x80) { *cp = c; return 1; }
++        v = (v << 6) | (it[i] & 0x3F);
++    }
++    *cp = v;
++    return n;
++}
++
++/* CJK 字型 glyph 依碼位升序排列 → 二分查找(既有字型走密集索引 txf_glyph)。 */
++static const TxfGlyph* txf_glyphCp(const TxfHeader* tf, int cp)
++{
++    const TxfGlyph* g = (const TxfGlyph*) (tf + 1);
++    int lo = 0, hi = (int) tf->glyphCount - 1;
++    while (lo <= hi) {
++        int mid = (lo + hi) >> 1;
++        int c = g[mid].code;
++        if (c == cp) return g + mid;
++        if (c < cp)  lo = mid + 1;
++        else         hi = mid - 1;
++    }
++    return NULL;
++}
++
+ /**
+   Returns the TxfGlyph for a glyph or zero if it is not available.
+   Automatically substitutes uppercase letters with lowercase if
+@@ -160,7 +203,49 @@ int txf_genText(TxfDrawState* ds, float* uvs, float* vertex, int stride,
+         }
+         */
+ 
+-        if (*it > ' ')
++        if (*it >= 0x80 && g_cjkFont)
++        {
++            int cp;
++            it += txf_utf8(it, end, &cp);
++            tgi = txf_glyphCp(g_cjkFont, cp);
++            if (tgi)
++            {
++                float cjkPR = scale *
++                              (g_cjkFont->pixelRange / g_cjkFont->fontSize);
++                gx = ds->x;
++                ds->x += tgi->advance * scale;
++                gy = ds->y;
++                gr = gx + tgi->emRect[2] * scale;
++                gt = gy + tgi->emRect[3] * scale;
++                gx = gx + tgi->emRect[0] * scale;
++                gy = gy + tgi->emRect[1] * scale;
++                min_s = tgi->tcRect[0];
++                max_s = tgi->tcRect[2];
++                min_t = 1.0f - tgi->tcRect[1];
++                max_t = 1.0f - tgi->tcRect[3];
++
++#define CJK_ATTR(s,t,x,y) \
++    uvs[0] = s; uvs[1] = t; uvs[2] = cjkPR; uvs[3] = ds->colorIndex; \
++    uvs += stride; \
++    vertex[0] = x; vertex[1] = y; vertex[2] = 0.0f; vertex += stride
++
++                CJK_ATTR( min_s, min_t, gx, gy );
++                CJK_ATTR( max_s, min_t, gr, gy );
++                CJK_ATTR( max_s, max_t, gr, gt );
++                if (ds->emitTris) {
++                    CJK_ATTR( max_s, max_t, gr, gt );
++                    CJK_ATTR( min_s, max_t, gx, gt );
++                    CJK_ATTR( min_s, min_t, gx, gy );
++                } else {
++                    CJK_ATTR( min_s, max_t, gx, gt );
++                }
++#undef CJK_ATTR
++                ++drawn;
++            }
++            ds->prev = NULL;
++            continue;
++        }
++        else if (*it > ' ')
+         {
+             tgi = txf_glyph(ds->tf, *it++);
+             if (tgi)
+@@ -257,6 +342,15 @@ static float txf_width2(const TxfHeader* tf, const uint8_t* it,
+     int ch;
+ 
+     while( it != end ) {
++        if (*it >= 0x80 && g_cjkFont) {
++            int cp;
++            it += txf_utf8(it, end, &cp);
++            tgi = txf_glyphCp(g_cjkFont, cp);
++            if (tgi)
++                width += tgi->advance;
++            prev = 0;
++            continue;
++        }
+         ch = *it++;
+         if (ch == TC_Font || ch == TC_Color) {
+             if (++it == end)
+diff --git a/src/support/txf_draw.h b/src/support/txf_draw.h
+index dce16b5..42e5504 100644
+--- a/src/support/txf_draw.h
++++ b/src/support/txf_draw.h
+@@ -59,6 +59,9 @@ extern "C" {
+ 
+ void txf_begin(TxfDrawState* ds, int fontN, float pointSize, float x, float y);
+ void txf_setFontSize(TxfDrawState* ds, float pointSize);
++/* 註冊 CJK 後備字型(稀疏碼位 .txf)。bytes >= 0x80 的 UTF-8 字改由此字型
++   查表算繪,使 SDF GUI 文字層(模組瀏覽器等)能顯示中文。傳 NULL 可停用。 */
++void txf_setCJKFont(const TxfHeader* tf);
+ int  txf_genText(TxfDrawState* ds, float* uvs, float* vertex, int stride,
+                  const uint8_t* it, unsigned int len);
+ float txf_emWidth(const TxfHeader*, const uint8_t* it, unsigned int len);
+diff --git a/src/textview.cpp b/src/textview.cpp
+index eb6fcc0..3265f88 100644
+--- a/src/textview.cpp
++++ b/src/textview.cpp
+@@ -3,6 +3,7 @@
+  */
+ 
+ #include <stdarg.h>
++#include <cstring>
+ 
+ #include "debug.h"
+ #include "imagemgr.h"
+@@ -11,6 +12,8 @@
+ #include "textview.h"
+ #include "u4.h"
+ #include "xu4.h"
++#include "cht.h"      // U4 繁中化
++#include "image.h"
+ 
+ using std::string;
+ 
+@@ -33,7 +36,19 @@ TextView::TextView(int x, int y, int columns, int rows)
+ 
+ void TextView::reinit() {
+     View::reinit();
+-    charset = xu4.imageMgr->get(BKGD_CHARSET)->image;
++    reloadCharset();
++}
++
++/*
++ * U4 繁中化:重新指向『目前』imageMgr 的 charset 字型圖。charset 是 static(所有
++ * TextView 共用),主題切換(F2)的 screenReInit 重建 imageMgr 後舊 charset Image 被
++ * 釋放 → 殘留的 static 指標懸空 → drawChar/drawLetter 崩潰。於 screenReInit 的
++ * choke point(screenInit_data)呼叫本函式,確保任何重建後 charset 立即有效。NULL-safe。
++ */
++void TextView::reloadCharset() {
++    ImageInfo* info = xu4.imageMgr->get(BKGD_CHARSET);
++    if (info && info->image)
++        charset = info->image;
+ }
+ 
+ const RGBA fontColor[25] = {
+@@ -161,6 +176,61 @@ string TextView::highlightKey(const string& input, unsigned int keyIndex) {
+ }
+ 
+ void TextView::textAt(int x, int y, const char *text) {
++    /* U4 繁中化(#4 intro 選單 / 角色創建):查表命中或字串已含 CJK → CJK 渲染 */
++    const char* zh = chtLookup(text, (int) strlen(text));
++    const char* render = zh ? zh : text;
++    bool hasCJK = false;
++    for (const char* q = render; *q; ++q)
++        if ((unsigned char) *q >= 0x80) { hasCJK = true; break; }
++    if (hasCJK) {
++        const unsigned char* p = (const unsigned char*) render;
++        int col = 0, dim = chtGlyphDim();
++        while (*p) {
++            unsigned char b = *p;
++            uint32_t cp; int n;
++            if (b < 0x80)            { cp = b;        n = 1; }
++            else if ((b >> 5) == 0x6){ cp = b & 0x1F; n = 2; }
++            else if ((b >> 4) == 0xE){ cp = b & 0x0F; n = 3; }
++            else if ((b >> 3) == 0x1E){cp = b & 0x07; n = 4; }
++            else { ++p; continue; }
++            for (int k = 1; k < n; ++k) {
++                if ((p[k] & 0xC0) != 0x80) { n = k; break; }
++                cp = (cp << 6) | (p[k] & 0x3F);
++            }
++            p += n;
++            if (cp < 0x80) { drawChar((int) cp, x + col, y); col += 1; }
++            else {
++                const uint8_t* g = chtGlyph(cp);
++                int px = this->x + (x + col) * CHAR_WIDTH;
++                int py = this->y + y * CHAR_HEIGHT;
++                /* U4 繁中化:防越界 clip。putPixel/fillRect 不做邊界檢查,
++                   中文翻譯換行較多時 y 可能超出文字區 → 越界寫入 screenImage
++                   → segfault(如 intro 故事第 3 段 7 行溢出 6 列文字區)。
++                   以 screenImage 邊界裁切,徹底根治此類崩潰。 */
++                const int SW = xu4.screenImage->width();
++                const int SH = xu4.screenImage->height();
++                if (g) for (int yy = 0; yy < dim; ++yy) for (int xx = 0; xx < dim; ++xx) {
++                    int dx = px + xx, dy = py + yy;
++                    if (dx < 0 || dy < 0 || dx >= SW || dy >= SH) continue;
++                    int a = g[yy * dim + xx];
++                    xu4.screenImage->putPixel(dx, dy, a, a, a, 255);
++                } else if (px >= 0 && py >= 0 && px + dim <= SW && py + dim <= SH) {
++                    xu4.screenImage->fillRect(px, py, dim, dim, 60, 60, 60);
++                }
++                col += 1;
++            }
++        }
++        /* U4 繁中化:CJK 路徑也要跟新游標到文字結尾,否則游標卡在舊位置、疊在中文字上
++           (如 intro 敘事的 @ 游標蓋住首字)。對齊下方 ASCII 路徑的 cursorFollowsText。 */
++        if (cursorFollowsText) {
++            _cursorX = x + col;
++            _cursorY = y;
++            if (cursorVisible)
++                syncCursorPos();
++        }
++        return;
++    }
++
+     int ch;
+     while ((ch = *text++)) {
+         switch (ch) {
+@@ -192,6 +262,11 @@ void TextView::textAtFmt(int x, int y, const char *fmt, ...) {
+     char buffer[512];
+     va_list args;
+ 
++    /* U4 繁中化:先查 format 字串(如 "%2d Torches" → "%2d 火把"),
++     * 中文 format 與英文 %d/%s/%c 同序,引數照常代入(對齊 screenMessage)。 */
++    const char* zhFmt = chtLookup(fmt, (int) strlen(fmt));
++    if (zhFmt) fmt = zhFmt;
++
+     va_start(args, fmt);
+     vsnprintf(buffer, sizeof(buffer), fmt, args);
+     va_end(args);
+@@ -203,6 +278,9 @@ void TextView::textAtFmt(int x, int y, const char *fmt, ...) {
+  * Draw text with a single character highlighted.
+  */
+ void TextView::textAtKey(int x, int y, const char *text, int keyIndex) {
++    /* U4 繁中化:命中則直接以中文渲染(略過 key 高亮);未命中走原流程 */
++    const char* zh = chtLookup(text, (int) strlen(text));
++    if (zh) { textAt(x, y, zh); return; }
+     string ctext = highlightKey(text, keyIndex);
+     textAt(x, y, ctext.c_str());
+ }
+@@ -247,8 +325,11 @@ void TextView::setCursorPos(int x, int y) {
+ void TextView::mouseTextPos(int mouseX, int mouseY, int& cx, int& cy) {
+     const ScreenState* ss = screenState();
+     int scale = ss->aspectH / U4_SCREEN_H;
+-    cx = (((mouseX - ss->aspectX) / scale) - x) / CHAR_WIDTH;
+-    cy = (((mouseY - ss->aspectY) / scale) - y) / CHAR_HEIGHT;
++    // U4 繁中化:先把視窗座標經 fill rect 反算回 render framebuffer 空間,放大視窗
++    // (scale-to-fill)後選單點擊才不會錯位。未 resize 時退化為 (mouseX - aspectX)。
++    screenWindowToRender(&mouseX, &mouseY);
++    cx = ((mouseX / scale) - x) / CHAR_WIDTH;
++    cy = ((mouseY / scale) - y) / CHAR_HEIGHT;
+ }
+ 
+ void TextView::showCursor() {
+diff --git a/src/textview.h b/src/textview.h
+index 8bfa3de..9c78eaa 100644
+--- a/src/textview.h
++++ b/src/textview.h
+@@ -11,8 +11,8 @@
+ #define PRINTF_LIKE(x,y)
+ #endif
+ 
+-#define CHAR_WIDTH 8
+-#define CHAR_HEIGHT 8
++#define CHAR_WIDTH 24
++#define CHAR_HEIGHT 24
+ 
+ #include <string>
+ #include "view.h"
+@@ -41,6 +41,7 @@ public:
+     TextView(int x, int y, int columns, int rows);
+ 
+     void reinit();
++    static void reloadCharset();    // U4 繁中化:主題切換後刷新 static charset(防懸空)
+ 
+     int cursorX() const { return _cursorX; }
+     int cursorY() const { return _cursorY; }
+diff --git a/src/tileanim.cpp b/src/tileanim.cpp
+index bafea6b..e8f3f9a 100644
+--- a/src/tileanim.cpp
++++ b/src/tileanim.cpp
+@@ -189,3 +189,21 @@ TileAnim* TileAnimSet::getByName(Symbol name) const
+         return NULL;
+     return i->second;
+ }
++
++/*
++ * U4 繁中化:檢查 anim 指標是否為本集合的成員。
++ * 主題切換(F2)會 delete 舊 tileanims 再建新;若某 tile 的 anim 仍指向舊集合已釋放的
++ * TileAnim,其指標值不會出現在新集合 → 回傳 false,呼叫端據此退回靜態繪製,避免
++ * 在 TileAnim::draw deref 懸空指標而 segfault。只比對指標『值』、不 deref 傳入指標,
++ * 故對懸空指標安全。集合很小(~20),線性掃描即可。
++ */
++bool TileAnimSet::contains(const TileAnim* a) const
++{
++    if (! a)
++        return false;
++    for (TileAnimMap::const_iterator i = tileanims.begin();
++         i != tileanims.end(); ++i)
++        if (i->second == a)
++            return true;
++    return false;
++}
+diff --git a/src/tileanim.h b/src/tileanim.h
+index 914bb89..c72fb03 100644
+--- a/src/tileanim.h
++++ b/src/tileanim.h
+@@ -109,6 +109,7 @@ public:
+ 
+     ~TileAnimSet();
+     TileAnim* getByName(Symbol name) const;
++    bool contains(const TileAnim* a) const;     // U4 繁中化:驗證 anim 指標是否屬本集合
+ 
+     TileAnimMap tileanims;
+ };
+diff --git a/src/tileview.cpp b/src/tileview.cpp
+index f13c0c5..5a43149 100644
+--- a/src/tileview.cpp
++++ b/src/tileview.cpp
+@@ -46,6 +46,11 @@ TileView::~TileView() {
+ void TileView::reinit() {
+     View::reinit();
+ 
++    /* U4 繁中化:重新指向當前 config 的 tileset。F2 即時切換 EGA/VGA 後 config
++       改變,舊 tileset 的 tile 影像指向已被 screenReInit 釋放的舊 imageMgr,若不
++       刷新會在 TileAnim::draw deref 壞指標而崩潰(對應 drawTile 的 graphics-mode TODO)。*/
++    tileset = xu4.config->tileset();
++
+     //Scratchpad needs to be re-inited if we rescale...
+     if (animated)
+     {
+@@ -75,8 +80,19 @@ void TileView::drawTile(const MapTile &mapTile, int x, int y) {
+     ASSERT(x < columns, "x value of %d out of range", x);
+     ASSERT(y < rows, "y value of %d out of range", y);
+ 
++    /* U4 繁中化:防護 —— graphics 切換邊界個別 tile 可能 image/anim 未就緒,
++       跳過以避免 deref 崩潰(對應原始碼 drawTile 的 graphics-mode TODO)。*/
++    if (!tile || !tile->getImage())
++        return;
++
++    /* U4 繁中化:只有當 tile 的 anim 確實屬於『目前』tileanims 才動畫繪製。
++       主題切換(F2)delete 舊 tileanims 後,殘留 tile 的 anim 會懸空,直接 deref 會在
++       TileAnim::draw 崩潰(intro F2 切換後的 segfault)。anim 不在現用集合 → 退回靜態繪製。 */
++    const TileAnimSet* curAnims = screenState()->tileanims;
++    bool animOK = tile->getAnim() && curAnims && curAnims->contains(tile->getAnim());
++
+     // draw the tile to the screen
+-    if (tile->getAnim()) {
++    if (animOK) {
+         // First, create our animated version of the tile
+         tile->getAnim()->draw(animated, tile, mapTile, DIR_NONE);
+ 
+diff --git a/src/u4.h b/src/u4.h
+index 767f30a..3f6abe4 100644
+--- a/src/u4.h
++++ b/src/u4.h
+@@ -24,8 +24,10 @@
+ #define TILE_HEIGHT (2 * CHAR_HEIGHT)
+ 
+ /* info for loading image data from charset.ega */
+-#define CHAR_WIDTH 8
+-#define CHAR_HEIGHT 8
++/* U4 繁中化 C:3x regime(960×600)讓 CJK 用 24×24 點陣字清楚可讀(rule 81)。
++   8×8 原始 cell × 3 = 24;art 在 imagemgr 改 3x 放大。 */
++#define CHAR_WIDTH 24
++#define CHAR_HEIGHT 24
+ 
+ /* some character defines */
+ #define CHARSET_ANKH '\0'
+@@ -47,16 +49,16 @@
+ #define CHARSET_FLOOR '\022'
+ 
+ /* screen size (in pixels) */
+-#define U4_SCREEN_W 320
+-#define U4_SCREEN_H 200
++#define U4_SCREEN_W 960
++#define U4_SCREEN_H 600
+ 
+ /* map viewport size (in tiles) */
+ #define VIEWPORT_W 11
+ #define VIEWPORT_H 11
+ 
+ /* screen border size (in pixels) */
+-#define BORDER_WIDTH 8
+-#define BORDER_HEIGHT 8
++#define BORDER_WIDTH 16
++#define BORDER_HEIGHT 16
+ 
+ /* text area (in character units) */
+ #define TEXT_AREA_X 24
+diff --git a/src/xu4.cpp b/src/xu4.cpp
+index 6a01ed5..9088254 100644
+--- a/src/xu4.cpp
++++ b/src/xu4.cpp
+@@ -34,6 +34,7 @@ extern "C" const char* androidInternalData();
+ 
+ #ifdef _WIN32
+ #include "win32console.c"
++#include <timeapi.h>   // timeBeginPeriod:見 main() 內音訊抖動修正(連 winmm)
+ #endif
+ 
+ #ifdef DEBUG
+@@ -349,13 +350,80 @@ static void servicesReset(XU4GameServices* gs) {
+ 
+ XU4GameServices xu4;
+ 
++#ifdef __APPLE__
++// Allegro 5 在 macOS 必須經 allegro_main 包裝:把使用者 main 移到工作執行緒,真正的
++// 主執行緒留給 Cocoa/dispatch 主佇列。否則 al_install_mouse → osx_init_mouse 會從主
++// 執行緒 dispatch_sync 回主執行緒(自我等待)→ libdispatch trap → SIGTRAP 當掉(實測
++// macOS 26.5.1 一開即崩)。含此標頭會把下面的 main 改名為 _al_mangled_main,真正的
++// main(建立 NSApplication、另起執行緒呼叫 _al_mangled_main)由 -lallegro_main 提供。
++#include <allegro5/allegro.h>
++#include <mach-o/dyld.h>   // _NSGetExecutablePath:讓 .app 直接當主程式時自己定位資料夾
++#include <unistd.h>        // chdir
++#endif
++
++// U4 繁中化:崩潰時把訊號與 backtrace 直接印到 console(stderr),不再無聲當掉。
++// 用 backtrace_symbols_fd(寫 fd,不 malloc)→ signal handler 內可安全呼叫。
++// 符號可讀性需連結時帶 -rdynamic(見 src/Makefile)。
++#if defined(__linux__) || defined(__APPLE__)
++#include <execinfo.h>
++#include <csignal>
++#include <unistd.h>
++static void u4chtCrashHandler(int sig) {
++    const char* name = (sig == SIGSEGV) ? "SIGSEGV" :
++                       (sig == SIGABRT) ? "SIGABRT" :
++                       (sig == SIGFPE)  ? "SIGFPE"  :
++                       (sig == SIGBUS)  ? "SIGBUS"  : "signal";
++    char msg[128];
++    int n = snprintf(msg, sizeof(msg),
++                     "\n*** U4-CHT 崩潰:%s (%d) — backtrace ***\n", name, sig);
++    if (n > 0) { ssize_t w = write(2, msg, (size_t) n); (void) w; }
++    void* bt[40];
++    int sz = backtrace(bt, 40);
++    backtrace_symbols_fd(bt, sz, 2);    // 直接寫 stderr,signal-safe
++    signal(sig, SIG_DFL);
++    raise(sig);                         // 回預設處理(保留 core / 正常退出碼)
++}
++static void u4chtInstallCrashHandler(void) {
++    signal(SIGSEGV, u4chtCrashHandler);
++    signal(SIGABRT, u4chtCrashHandler);
++    signal(SIGFPE,  u4chtCrashHandler);
++    signal(SIGBUS,  u4chtCrashHandler);
++}
++#else
++static void u4chtInstallCrashHandler(void) {}
++#endif
+ 
+ int main(int argc, char *argv[]) {
++    u4chtInstallCrashHandler();
++#ifdef __APPLE__
++    // .app 雙擊時 cwd 為 /,且本程式可直接當 CFBundleExecutable(不靠 launch 腳本)。
++    // 依執行檔自身路徑 chdir 到資料夾,讓 xu4 找得到 ultima4.zip / *.mod / 字型:
++    // 優先 <exe>/../Resources/share(標準 .app 結構),退而求其次用執行檔所在目錄。
++    {
++        char ep[4096]; uint32_t epsz = sizeof(ep);
++        if (_NSGetExecutablePath(ep, &epsz) == 0) {
++            char* sl = strrchr(ep, '/');
++            if (sl) {
++                *sl = '\0';
++                char share[4200];
++                snprintf(share, sizeof(share), "%s/../Resources/share", ep);
++                if (chdir(share) != 0)
++                    (void) chdir(ep);
++            }
++        }
++    }
++#endif
+ #if defined(MACOSX)
+     osxInit(argv[0]);
+ #endif
+ #ifdef _WIN32
+     redirectIOToConsole();
++    // 音訊修正:Windows 預設計時器精度約 15.6ms,但 Faun 的 WASAPI 後端補緩衝用
++    // Sleep(2)。想睡 2ms 卻睡了 ~15ms → 把 ~30-40ms 的串流緩衝吃光 → 週期性 underrun
++    // → 背景 bass/長音「頓頓」。timeBeginPeriod(1) 把計時器精度拉到 1ms,Sleep(2) 才
++    // 準,預設緩衝即足夠,毋須放大緩衝(放大會增加 SFX 延遲)。整個 process 期間有效,
++    // 結束時 OS 自動還原。需連結 winmm(見 project.b win32 libs)。
++    timeBeginPeriod(1);
+ #endif
+     //printf("sizeof(Tile) %ld\n", sizeof(Tile));
+ 

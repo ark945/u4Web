@@ -1,0 +1,109 @@
+# Web Build Environment for u4Web (Emscripten WebAssembly)
+# This Dockerfile compiles xu4 C++ to JS/Wasm and bundles all translation/font assets.
+
+FROM emscripten/emsdk:3.1.53
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install host build dependencies (compilers, libraries, fonts, and python packages)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git make curl ca-certificates pkg-config \
+    libpng-dev libvorbis-dev libogg-dev libasound2-dev libpulse-dev \
+    fonts-noto-cjk python3-pip python3-pil python3-numpy python3-scipy \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# 1. Compile and install Boron for Host (required for packing game modules)
+RUN git clone https://git.code.sf.net/p/urlan/boron/code boron-host \
+ && cd boron-host && git checkout v2.0.8 \
+ && ./configure --static \
+ && make && make install \
+ && cd .. && rm -rf boron-host
+
+# 2. Compile libboron.a for WebAssembly
+RUN git clone https://git.code.sf.net/p/urlan/boron/code boron-wasm \
+ && cd boron-wasm && git checkout v2.0.8 \
+ && emconfigure ./configure --static \
+ && emmake make \
+ && cp libboron.a /usr/local/lib/ \
+ && mkdir -p /usr/local/include/boron \
+ && cp include/boron/*.h /usr/local/include/boron/ \
+ && cd .. && rm -rf boron-wasm
+
+# Copy current project files (patches, assets, tools, web layout)
+COPY . /build
+WORKDIR /build
+
+# 3. Clone Upstream xu4 Engine
+RUN git clone https://github.com/xu4-engine/u4.git xu4 \
+ && cd xu4 && git checkout master && git submodule update --init --recursive
+
+# 4. Copy translation code, assets, and apply patches
+RUN cp patches/cht.cpp patches/cht.h xu4/src/ \
+ && cp patches/sys_sdl.c xu4/src/faun/ \
+ && git -C xu4 apply --ignore-whitespace ../patches/engine.patch \
+ && git -C xu4/src/faun apply --ignore-whitespace ../../../patches/faun.patch \
+ && cp assets/cjk_font*.bin xu4/ \
+ && cp assets/u4_cht.tab xu4/
+
+# 5. Translate vendor boron scripts and pack game modules
+RUN python3 tools/patch_vendor_boron.py \
+      --vendors xu4/module/Ultima-IV/vendors.b \
+      --bilingual assets/vendor_bilingual.json \
+ && cd xu4 && make mod
+
+# 6. Download original game files
+RUN cd xu4 && make download
+
+# 7. Generate GPU SDF CJK Font
+RUN python3 tools/build_cjk_txf.py \
+      --font /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
+      --index 3 \
+      --atlas xu4/module/render/font/cfont.png \
+      --out-txf xu4/module/render/font/cfont-cjk.txf
+
+# 8. Compile libfaun.a for WebAssembly
+RUN cd xu4/src/faun \
+ && emconfigure ./configure --no_flac --static \
+ && emmake make
+
+# 9. Compile xu4 Engine to WebAssembly
+RUN cd xu4 \
+ && ./configure --glfw --gpu \
+ && cd src \
+ && emmake make \
+      MAIN=xu4.js \
+      EXEEXT=.js \
+      CXXFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I/usr/local/include -O3 -DNDEBUG" \
+      CFLAGS="-Wall -I. -Isupport -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I/usr/local/include -O3 -DNDEBUG" \
+      LDFLAGS="-L/usr/local/lib -Lfaun \
+        -sUSE_GLFW=3 \
+        -sUSE_SDL=2 \
+        -sUSE_LIBPNG=1 \
+        -sUSE_ZLIB=1 \
+        -sUSE_PTHREADS=1 \
+        -sPTHREAD_POOL_SIZE=4 \
+        -sGL_VERSION=3 \
+        -sGL_ES3=1 \
+        -sMIN_WEBGL_VERSION=2 \
+        -sALLOW_MEMORY_GROWTH=1 \
+        --preload-file ../Ultima-IV.mod@/Ultima-IV.mod \
+        --preload-file ../U4-Upgrade.mod@/U4-Upgrade.mod \
+        --preload-file ../render.pak@/render.pak \
+        --preload-file ../cjk_font.bin@/cjk_font.bin \
+        --preload-file ../cjk_font_firefly.bin@/cjk_font_firefly.bin \
+        --preload-file ../cjk_font_kai.bin@/cjk_font_kai.bin \
+        --preload-file ../u4_cht.tab@/u4_cht.tab \
+        --preload-file ../ultima4.zip@/ultima4.zip \
+        --preload-file ../u4upgrad.zip@/u4upgrad.zip" \
+      xu4.js
+
+# 10. Assemble Web Distribution output
+RUN mkdir -p /dist \
+ && cp web/index.html /dist/ \
+ && curl -sSL -o /dist/coi-serviceworker.js https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/master/coi-serviceworker.js \
+ && cp xu4/src/xu4.js xu4/src/xu4.wasm xu4/src/xu4.data xu4/src/xu4.worker.js /dist/
+
+CMD ["bash", "-c", "echo 'Build successful. Copying output to /out...' && cp -rf /dist/* /out/"]
