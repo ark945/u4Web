@@ -87,7 +87,7 @@ jobs:
         sed -i $'s|^\tcc |\t$(CC) |' Makefile
         
         # Only build the static library (not the boron executable which needs readline)
-        emmake make libboron.a OPT_FLAGS="-O3 -DNDEBUG"
+        emmake make libboron.a OPT_FLAGS="-O3 -DNDEBUG -sUSE_PTHREADS=1"
         
         # Install headers and libraries locally to a "dist" folder
         make DESTDIR=${{ github.workspace }}/boron-wasm/dist install-dev
@@ -126,7 +126,7 @@ jobs:
         cd xu4/src/faun
         emconfigure ./configure --no_flac --static
         # Tell emcc to use Emscripten's built-in SDL2, OGG, and Vorbis ports
-        export EMCC_CFLAGS="-sUSE_SDL=2 -sUSE_OGG=1 -sUSE_VORBIS=1"
+        export EMCC_CFLAGS="-sUSE_SDL=2 -sUSE_OGG=1 -sUSE_VORBIS=1 -sUSE_PTHREADS=1"
         emmake make libfaun.a
         cd ../../..
 
@@ -141,14 +141,16 @@ jobs:
           MAIN=xu4.js \
           EXEEXT=.js \
           LIBS="-lfaun -lboron" \
-          CXXFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sASYNCIFY=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
-          CFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sASYNCIFY=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
+          CXXFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sASYNCIFY=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
+          CFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sASYNCIFY=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
           LDFLAGS="-L${{ github.workspace }}/boron-wasm/dist/lib -Lfaun \
             -sUSE_GLFW=3 \
             -sUSE_SDL=2 \
             -sUSE_LIBPNG=1 \
             -sUSE_ZLIB=1 \
             -sASYNCIFY=1 \
+            -sUSE_PTHREADS=1 \
+            -sPTHREAD_POOL_SIZE=4 \
             -sUSE_OGG=1 \
             -sUSE_VORBIS=1 \
             -sFORCE_FILESYSTEM=1 \
@@ -183,6 +185,7 @@ jobs:
         cp xu4/src/xu4.js dist/web/
         cp xu4/src/xu4.wasm dist/web/
         cp xu4/src/xu4.data dist/web/
+        cp xu4/src/xu4.worker.js dist/web/
         
         echo "=== dist/web contents ==="
         ls -la dist/web
