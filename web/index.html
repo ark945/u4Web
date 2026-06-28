@@ -249,11 +249,26 @@
                 function() {
                     // 初始化存檔目錄並掛載 IndexedDB (IDBFS)
                     try {
-                        Module.FS.mkdir('/home');
-                        Module.FS.mkdir('/home/web_user');
-                        Module.FS.mkdir('/home/web_user/.config');
-                        Module.FS.mkdir('/home/web_user/.config/xu4');
-                        
+                        var createPathSafe = function(path) {
+                            var parts = path.split('/');
+                            var current = '';
+                            for (var i = 0; i < parts.length; i++) {
+                                if (parts[i] === '') continue;
+                                current += '/' + parts[i];
+                                try {
+                                    var stat = Module.FS.stat(current);
+                                    if (stat && !Module.FS.isDir(stat.mode)) {
+                                        console.warn("路徑已存在但不是目錄，刪除並重建: " + current);
+                                        Module.FS.unlink(current);
+                                        Module.FS.mkdir(current);
+                                    }
+                                } catch (e) {
+                                    Module.FS.mkdir(current);
+                                }
+                            }
+                        };
+
+                        createPathSafe('/home/web_user/.config/xu4');
                         Module.FS.mount(Module.FS.filesystems.IDBFS, {}, '/home/web_user/.config/xu4');
                         
                         // 啟動時自本機 IndexedDB 同步存檔到 VFS
