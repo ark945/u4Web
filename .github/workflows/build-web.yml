@@ -141,8 +141,8 @@ jobs:
           MAIN=xu4.js \
           EXEEXT=.js \
           LIBS="-lfaun -lboron" \
-          CXXFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -DVERSION=\\\"DR-1.0\\\"" \
-          CFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -DVERSION=\\\"DR-1.0\\\"" \
+          CXXFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
+          CFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O3 -DNDEBUG -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
           LDFLAGS="-L${{ github.workspace }}/boron-wasm/dist/lib -Lfaun \
             -sUSE_GLFW=3 \
             -sUSE_SDL=2 \
@@ -151,6 +151,8 @@ jobs:
             -sUSE_PTHREADS=1 \
             -sUSE_OGG=1 \
             -sUSE_VORBIS=1 \
+            -sFORCE_FILESYSTEM=1 \
+            -sEXPORTED_RUNTIME_METHODS=FS \
             -sPTHREAD_POOL_SIZE=4 \
             -sFULL_ES3=1 \
             -sMIN_WEBGL_VERSION=2 \
