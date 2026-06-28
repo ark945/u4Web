@@ -262,6 +262,17 @@
             if (e.key === 'Enter') verifyPassword();
         });
 
+        // 抑制 Emscripten WASM 非致命的 "memory access out of bounds" 錯誤
+        // 這些錯誤源於 ASYNCIFY + pthreads 與 SDL2 ScriptProcessorNode 的已知衝突
+        // 不會影響遊戲核心功能，但會大量刷佔 Console
+        window.addEventListener('error', function(e) {
+            if (e.error instanceof WebAssembly.RuntimeError &&
+                e.error.message.includes('memory access out of bounds')) {
+                e.preventDefault();
+                return true;
+            }
+        });
+
         // Wasm 引擎設定與加載
         var Module = {
             preRun: [
