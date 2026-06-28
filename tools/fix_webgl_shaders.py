@@ -70,7 +70,7 @@ def patch_faun_tmsg(gpu_cpp_path):
         '#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)\n'
         '#include <errno.h>\n'
         '#include <time.h>\n'
-        'static inline int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout) {\n'
+        'int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout) {\n'
         '    if (sem_trywait(sem) == 0) return 0;\n'
         '    errno = ETIMEDOUT;\n'
         '    return -1;\n'
@@ -78,7 +78,7 @@ def patch_faun_tmsg(gpu_cpp_path):
         '#endif'
     )
 
-    if '#include <semaphore.h>' in content and 'static inline int sem_timedwait' not in content:
+    if '#include <semaphore.h>' in content and 'int sem_timedwait' not in content:
         content = content.replace('#include <semaphore.h>', stub)
         with open(tmsg_path, 'w') as f:
             f.write(content)
