@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch xu4 GLSL shaders and OpenGL code for WebGL2 compatibility.
+"""Patch xu4 GLSL shaders, OpenGL code, and Faun support for WebGL2/Emscripten compatibility.
 
 WebGL2 only supports GLSL '#version 300 es', but the xu4 engine defaults to
 '#version 330' (desktop OpenGL) or '#version 310 es' (Android/GLES).
@@ -9,6 +9,7 @@ This script fixes:
 2. gpu_opengl.cpp: Fixes GL_RGB internal format (invalid in WebGL2 with RGBA data).
 3. External .glsl files: Removes trailing ';' after function closing braces.
 4. External .glsl files: Removes 'f' suffix from float literals (invalid in GLSL ES).
+5. faun/support/tmsg.c: Stubs sem_timedwait for single-threaded Emscripten builds to prevent link failures.
 """
 
 import glob
@@ -52,6 +53,38 @@ def patch_gpu_opengl(filepath):
         print(f"  Patched {filepath}")
     else:
         print(f"  No changes needed in {filepath}")
+
+
+def patch_faun_tmsg(gpu_cpp_path):
+    """Patch tmsg.c to stub sem_timedwait when compiled without pthreads."""
+    tmsg_path = os.path.join(os.path.dirname(gpu_cpp_path), 'faun', 'support', 'tmsg.c')
+    if not os.path.exists(tmsg_path):
+        print(f"  [Info] tmsg.c not found at {tmsg_path}, skipping faun patch")
+        return
+
+    with open(tmsg_path, 'r') as f:
+        content = f.read()
+
+    stub = (
+        '#include <semaphore.h>\n'
+        '#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)\n'
+        '#include <errno.h>\n'
+        '#include <time.h>\n'
+        'static inline int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout) {\n'
+        '    if (sem_trywait(sem) == 0) return 0;\n'
+        '    errno = ETIMEDOUT;\n'
+        '    return -1;\n'
+        '}\n'
+        '#endif'
+    )
+
+    if '#include <semaphore.h>' in content and 'static inline int sem_timedwait' not in content:
+        content = content.replace('#include <semaphore.h>', stub)
+        with open(tmsg_path, 'w') as f:
+            f.write(content)
+        print(f"  [OK] Stubbed sem_timedwait in {tmsg_path}")
+    else:
+        print(f"  [Info] No faun tmsg.c patch needed (already patched or include missing)")
 
 
 def patch_shader_files(shader_dir):
@@ -98,6 +131,9 @@ if __name__ == '__main__':
     gpu_cpp = sys.argv[1]
     print("Patching gpu_opengl.cpp...")
     patch_gpu_opengl(gpu_cpp)
+
+    print("Patching faun/support/tmsg.c if present...")
+    patch_faun_tmsg(gpu_cpp)
 
     if len(sys.argv) >= 3:
         shader_dir = sys.argv[2]
