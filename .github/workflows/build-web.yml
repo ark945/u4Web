@@ -56,7 +56,8 @@ jobs:
         sed -i 's|#include "config.h"|#include "config.h"\n#include "map.h"\n#include "creature.h"|' xu4/src/screen_glfw.cpp
         
         # Fix GLSL shader version for WebGL2 (must be "#version 300 es", not "#version 330")
-        python3 tools/fix_webgl_shaders.py xu4/src/gpu_opengl.cpp
+        # Also fix GLSL ES syntax issues in external shader files
+        python3 tools/fix_webgl_shaders.py xu4/src/gpu_opengl.cpp xu4/module/render/shader
         
         # Copy translation font and lookup binary assets
         cp assets/cjk_font*.bin xu4/
