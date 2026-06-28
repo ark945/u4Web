@@ -55,6 +55,9 @@ jobs:
         # Fix incomplete type errors in screen_glfw.cpp (missing map.h and creature.h)
         sed -i 's|#include "config.h"|#include "config.h"\n#include "map.h"\n#include "creature.h"|' xu4/src/screen_glfw.cpp
         
+        # Fix GLSL shader version for WebGL2 (must be "#version 300 es", not "#version 330")
+        python3 tools/fix_webgl_shaders.py xu4/src/gpu_opengl.cpp
+        
         # Copy translation font and lookup binary assets
         cp assets/cjk_font*.bin xu4/
         cp assets/u4_cht.tab xu4/
