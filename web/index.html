@@ -208,6 +208,7 @@
         <div class="control-panel">
             <button class="btn-control" onclick="downloadSaves()">💾 下載存檔備份 (Download)</button>
             <button class="btn-control" onclick="triggerUpload()">📂 上傳存檔還原 (Upload)</button>
+            <button class="btn-control" onclick="restartGame()">🔄 重啟遊戲 (Restart)</button>
             <input type="file" id="upload-input" style="display: none;" accept=".zip" onchange="uploadSaves(event)">
         </div>
     </div>
@@ -226,6 +227,7 @@
             
             // 比對 arku4 的 Hash
             if (hashHex === "003a10c54e22356d77f80d502f4dbbb509909522d17cb6ba195b37806345305b") {
+                sessionStorage.setItem('game_password', password);
                 errorMsg.innerText = "驗證成功，喚醒聖者中...";
                 document.getElementById('lock-screen').style.opacity = '0';
                 setTimeout(() => {
@@ -235,6 +237,23 @@
                 }, 500);
             } else {
                 errorMsg.innerText = "密碼錯誤，真理、愛與勇氣拒絕了您。";
+            }
+        }
+
+        // 自動登入檢查
+        async function checkAutoUnlock() {
+            const savedPassword = sessionStorage.getItem('game_password');
+            if (savedPassword) {
+                document.getElementById('password').value = savedPassword;
+                await verifyPassword();
+            }
+        }
+        window.addEventListener('DOMContentLoaded', checkAutoUnlock);
+
+        // 重啟遊戲
+        function restartGame() {
+            if (confirm("確定要重啟遊戲嗎？所有未存檔的進度將會遺失。")) {
+                window.location.reload();
             }
         }
 
