@@ -11,6 +11,7 @@ This script fixes:
 4. External .glsl files: Removes 'f' suffix from float literals (invalid in GLSL ES).
 5. faun/support/tmsg.c: Stubs sem_timedwait for single-threaded Emscripten builds to prevent link failures.
 6. support/getTicks.c: Patches msecSleep to call emscripten_sleep when ASYNCIFY is enabled to yield to browser main loop.
+7. event.cpp: Patches frameSleep to force a yield of msecSleep(1) when sleep time is 0 under Emscripten.
 """
 
 import glob
@@ -149,6 +150,44 @@ def patch_get_ticks(gpu_cpp_path):
         print(f"  [Info] getTicks.c already patched or signature mismatch")
 
 
+def patch_event_cpp(gpu_cpp_path):
+    """Patch event.cpp to force a yield of msecSleep(1) when fsleep is 0 under Emscripten."""
+    event_path = os.path.join(os.path.dirname(gpu_cpp_path), 'event.cpp')
+    if not os.path.exists(event_path):
+        print(f"  [Info] event.cpp not found at {event_path}, skipping patch")
+        return
+
+    with open(event_path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+
+    # Normalize line endings
+    content = content.replace('\r\n', '\n')
+
+    old_sleep = (
+        '    if (fs->fsleep)\n'
+        '        msecSleep(fs->fsleep);\n'
+        '    return 0;'
+    )
+    
+    new_sleep = (
+        '    if (fs->fsleep)\n'
+        '        msecSleep(fs->fsleep);\n'
+        '#ifdef __EMSCRIPTEN__\n'
+        '    else\n'
+        '        msecSleep(1);\n'
+        '#endif\n'
+        '    return 0;'
+    )
+
+    if old_sleep in content:
+        content = content.replace(old_sleep, new_sleep)
+        with open(event_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"  [OK] Patched frameSleep in {event_path} to force yield on Emscripten")
+    else:
+        print(f"  [Info] event.cpp already patched or signature mismatch")
+
+
 def patch_shader_files(shader_dir):
     """Fix GLSL ES syntax issues in shader files."""
     patterns = [
@@ -199,6 +238,9 @@ if __name__ == '__main__':
 
     print("Patching support/getTicks.c if present...")
     patch_get_ticks(gpu_cpp)
+
+    print("Patching event.cpp if present...")
+    patch_event_cpp(gpu_cpp)
 
     if len(sys.argv) >= 3:
         shader_dir = sys.argv[2]
