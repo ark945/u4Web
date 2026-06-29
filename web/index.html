@@ -267,12 +267,13 @@
             const audioContexts = [];
             const origAudioContext = window.AudioContext || window.webkitAudioContext;
             if (origAudioContext) {
-                const HookedAudioContext = function(...args) {
-                    const ctx = new origAudioContext(...args);
-                    audioContexts.push(ctx);
-                    return ctx;
-                };
-                HookedAudioContext.prototype = origAudioContext.prototype;
+                const HookedAudioContext = new Proxy(origAudioContext, {
+                    construct(target, argumentsList, newTarget) {
+                        const ctx = Reflect.construct(target, argumentsList, newTarget);
+                        audioContexts.push(ctx);
+                        return ctx;
+                    }
+                });
                 if (window.AudioContext) window.AudioContext = HookedAudioContext;
                 if (window.webkitAudioContext) window.webkitAudioContext = HookedAudioContext;
             }
