@@ -159,6 +159,7 @@ jobs:
             -sFULL_ES3=1 \
             -sMIN_WEBGL_VERSION=2 \
             -sALLOW_MEMORY_GROWTH=1 \
+            -sINITIAL_MEMORY=67108864 \
             --preload-file ../Ultima-IV.mod@/Ultima-IV.mod \
             --preload-file ../U4-Upgrade.mod@/U4-Upgrade.mod \
             --preload-file ../render.pak@/render.pak \
