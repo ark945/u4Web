@@ -262,6 +262,38 @@
             if (e.key === 'Enter') verifyPassword();
         });
 
+        // 自動捕獲並在使用者點擊或按鍵時恢復所有 AudioContext（解決瀏覽器不支援網頁背景音效自動播放的問題）
+        (function() {
+            const audioContexts = [];
+            const origAudioContext = window.AudioContext || window.webkitAudioContext;
+            if (origAudioContext) {
+                const HookedAudioContext = function(...args) {
+                    const ctx = new origAudioContext(...args);
+                    audioContexts.push(ctx);
+                    return ctx;
+                };
+                HookedAudioContext.prototype = origAudioContext.prototype;
+                if (window.AudioContext) window.AudioContext = HookedAudioContext;
+                if (window.webkitAudioContext) window.webkitAudioContext = HookedAudioContext;
+            }
+
+            function resumeAll() {
+                audioContexts.forEach(ctx => {
+                    if (ctx.state === 'suspended') {
+                        ctx.resume().then(() => {
+                            console.log("AudioContext 成功手動恢復！目前狀態:", ctx.state);
+                        }).catch(err => {
+                            console.error("恢復 AudioContext 失敗:", err);
+                        });
+                    }
+                });
+            }
+
+            window.addEventListener('click', resumeAll);
+            window.addEventListener('keydown', resumeAll);
+            window.addEventListener('touchstart', resumeAll);
+        })();
+
         // 抑制 Emscripten WASM 非致命的 "memory access out of bounds" 錯誤
         // 這些錯誤源於 ASYNCIFY + pthreads 與 SDL2 ScriptProcessorNode 的已知衝突
         // 不會影響遊戲核心功能，但會大量刷佔 Console
