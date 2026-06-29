@@ -141,15 +141,16 @@ jobs:
           MAIN=xu4.js \
           EXEEXT=.js \
           LIBS="-lfaun -lboron" \
-          CXXFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O2 -g2 -sASSERTIONS=2 -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sPROXY_TO_PTHREAD=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
-          CFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O2 -g2 -sASSERTIONS=2 -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sUSE_PTHREADS=1 -sPROXY_TO_PTHREAD=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
+          CXXFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O2 -g2 -sASSERTIONS=2 -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=262144 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
+          CFLAGS="-Wall -I. -Isupport -Ifaun -DUSE_BORON -DCONF_MODULE -DGPU_RENDER -I${{ github.workspace }}/boron-wasm/dist/include -O2 -g2 -sASSERTIONS=2 -sUSE_GLFW=3 -sUSE_SDL=2 -sUSE_LIBPNG=1 -sUSE_ZLIB=1 -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=262144 -sUSE_PTHREADS=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS -DVERSION=\\\"DR-1.0\\\"" \
           LDFLAGS="-L${{ github.workspace }}/boron-wasm/dist/lib -Lfaun \
             -sUSE_GLFW=3 \
             -sUSE_SDL=2 \
             -sUSE_LIBPNG=1 \
             -sUSE_ZLIB=1 \
+            -sASYNCIFY=1 \
+            -sASYNCIFY_STACK_SIZE=262144 \
             -sUSE_PTHREADS=1 \
-            -sPROXY_TO_PTHREAD=1 \
             -sPTHREAD_POOL_SIZE=4 \
             -sUSE_OGG=1 \
             -sUSE_VORBIS=1 \

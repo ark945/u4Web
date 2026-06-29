@@ -321,11 +321,11 @@ if __name__ == '__main__':
     print("Patching faun/support/tmsg.c if present...")
     patch_faun_tmsg(gpu_cpp)
 
-    # print("Patching support/getTicks.c if present...")
-    # patch_get_ticks(gpu_cpp)
+    print("Patching support/getTicks.c if present...")
+    patch_get_ticks(gpu_cpp)
 
-    # print("Patching event.cpp if present...")
-    # patch_event_cpp(gpu_cpp)
+    print("Patching event.cpp if present...")
+    patch_event_cpp(gpu_cpp)
 
     print("Patching screen_glfw.cpp if present...")
     patch_screen_glfw(gpu_cpp)
